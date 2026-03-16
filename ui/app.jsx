@@ -235,7 +235,7 @@ function RangeFilter({ label, min, max, value, onChange, step = 0.01 }) {
     <div style={{ marginBottom: 8 }}>
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#94a3b8", marginBottom: 2 }}>
         <span style={{ textTransform: "uppercase", letterSpacing: 1 }}>{label}</span>
-        <span style={{ color: "#e2e8f0", fontVariantNumeric: "tabular-nums" }}>{value[0].toFixed(2)} \u2013 {value[1].toFixed(2)}</span>
+        <span style={{ color: "#e2e8f0", fontVariantNumeric: "tabular-nums" }}>{value[0].toFixed(2)} – {value[1].toFixed(2)}</span>
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <input type="range" min={min} max={max} step={step} value={value[0]}
@@ -258,21 +258,24 @@ function CardDetail({ card }) {
   );
 
   const barW = Math.round(card.winRatio * 200);
+  // Upgrade http → https for image URLs to avoid mixed-content blocking
+  const imgSrc = card.imageUrl ? card.imageUrl.replace(/^http:\/\//, "https://") : null;
+
   return (
     <div style={{ padding: 16 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
         <span style={{ fontSize: 22 }}>{TYPE_ICONS[card.type]}</span>
         <div>
           <div style={{ fontSize: 16, fontWeight: 700, color: "#f1f5f9" }}>{card.name}</div>
-          <div style={{ fontSize: 11, color: "#94a3b8" }}>{card.type.replace(/([A-Z])/g, " $1").trim()} \u00B7 Deck {card.deck}</div>
+          <div style={{ fontSize: 11, color: "#94a3b8" }}>{card.type.replace(/([A-Z])/g, " $1").trim()} · Deck {card.deck}</div>
         </div>
       </div>
 
-      {card.imageUrl && (
+      {imgSrc && (
         <div style={{ marginBottom: 12, borderRadius: 8, overflow: "hidden", border: "1px solid #1e293b" }}>
-          <img src={card.imageUrl} alt={card.name}
+          <img src={imgSrc} alt={card.name}
             style={{ width: "100%", display: "block", background: "#1e293b" }}
-            onError={e => { e.target.style.display = "none"; }}
+            onError={e => { e.target.parentElement.style.display = "none"; }}
           />
         </div>
       )}
@@ -290,6 +293,13 @@ function CardDetail({ card }) {
           <div style={{ width: barW, maxWidth: "100%", height: 4, background: "linear-gradient(90deg, #3b82f6, #8b5cf6)", borderRadius: 2 }} />
         </div>
       </div>
+
+      {card.pwr != null && card.pwr > 0 && (
+        <div style={{ fontSize: 12, marginBottom: 8 }}>
+          <span style={{ color: "#64748b" }}>PWR: </span>
+          <span style={{ color: "#a855f7", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{card.pwr.toFixed(2)}</span>
+        </div>
+      )}
 
       {card.text && (
         <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 10, lineHeight: 1.5, fontStyle: "italic", borderLeft: "2px solid #334155", paddingLeft: 8 }}>
@@ -559,7 +569,7 @@ export default function App() {
             <span style={{ color: "#f59e0b" }}>Agricola</span> Explorer
           </div>
           <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
-            Knowledge Graph \u00B7 {allCards.length} cards
+            Knowledge Graph · {allCards.length} cards
           </div>
         </div>
 
@@ -689,6 +699,7 @@ export default function App() {
                     <th style={{ padding: "8px 6px" }}>Type</th>
                     <th style={{ padding: "8px 6px" }}>Win %</th>
                     <th style={{ padding: "8px 6px" }}>Play %</th>
+                    <th style={{ padding: "8px 6px" }}>PWR</th>
                     <th style={{ padding: "8px 6px" }}>Gains</th>
                   </tr>
                 </thead>
@@ -703,7 +714,7 @@ export default function App() {
                       onMouseLeave={e => { if (c.id !== selectedId) e.currentTarget.style.background = "transparent"; }}
                     >
                       <td style={{ padding: "6px", fontWeight: 500, color: "#f1f5f9" }}>
-                        <span style={{ color: DECK_COLOURS[c.deck] || "#94a3b8", marginRight: 4 }}>\u25CF</span>{c.name}
+                        <span style={{ color: DECK_COLOURS[c.deck] || "#94a3b8", marginRight: 4 }}>●</span>{c.name}
                       </td>
                       <td style={{ padding: "6px", color: "#94a3b8" }}>{c.deck}</td>
                       <td style={{ padding: "6px" }}>{TYPE_ICONS[c.type]} {c.type.replace(/([A-Z])/g, " $1").trim()}</td>
@@ -712,6 +723,9 @@ export default function App() {
                       </td>
                       <td style={{ padding: "6px", fontVariantNumeric: "tabular-nums", color: "#94a3b8" }}>
                         {(c.playRatio * 100).toFixed(1)}%
+                      </td>
+                      <td style={{ padding: "6px", fontVariantNumeric: "tabular-nums", color: c.pwr > 2 ? "#a855f7" : "#94a3b8" }}>
+                        {c.pwr > 0 ? c.pwr.toFixed(2) : "–"}
                       </td>
                       <td style={{ padding: "6px" }}>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 2 }}>

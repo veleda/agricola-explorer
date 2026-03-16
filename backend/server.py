@@ -79,6 +79,7 @@ def _build_cards_json() -> list[dict]:
             "deck": r.get("Deck", "") or "",
             "winRatio": round(r.get("win_ratio") or 0, 4),
             "playRatio": round(r.get("play_ratio") or 0, 4),
+            "pwr": round(r.get("PWR") or 0, 2),
             "cost": _strip(r.get("hasCost", "")) or None,
             "costLabel": r.get("cost_label") or None,
             "imageUrl": r.get("image_url") or None,
