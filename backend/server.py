@@ -90,6 +90,7 @@ def _build_cards_json() -> list[dict]:
             "affects": affects_map.get(subj, []),
             "relations": rels_map.get(subj, []),
             "text": r.get("Card_Text") or "",
+            "prerequisite": r.get("Prerequisite") or None,
             "banned": bool(r.get("banned")),
         })
     return cards

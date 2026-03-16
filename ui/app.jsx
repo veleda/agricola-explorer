@@ -276,7 +276,7 @@ function RangeFilter({ label, min, max, value, onChange, step = 0.01 }) {
 }
 
 // ── Card detail panel ───────────────────────────────────────────────────────
-function CardDetail({ card, onClose }) {
+function CardDetail({ card, onClose, inHand, onToggleHand }) {
   if (!card) return (
     <div style={{ padding: 24, color: "#64748b", fontSize: 13, textAlign: "center" }}>
       Click a card node or table row to inspect it.
@@ -306,6 +306,24 @@ function CardDetail({ card, onClose }) {
         </div>
       </div>
 
+      {/* Add / Remove from hand */}
+      {onToggleHand && (() => {
+        const isHandType = card.type === "Occupation" || card.type === "MinorImprovement";
+        if (!isHandType) return null;
+        return (
+          <button onClick={() => onToggleHand(card.id)}
+            style={{
+              width: "100%", padding: "6px 12px", borderRadius: 8, marginBottom: 12,
+              border: inHand ? "1px solid #dc262644" : "1px solid #f59e0b44",
+              background: inHand ? "#dc262618" : "#f59e0b18",
+              color: inHand ? "#fca5a5" : "#f59e0b",
+              fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all 0.15s",
+            }}>
+            {inHand ? "\u2212 Remove from hand" : "+ Add to hand"}
+          </button>
+        );
+      })()}
+
       {imgSrc && (
         <div style={{ marginBottom: 12, borderRadius: 8, overflow: "hidden", border: "1px solid #1e293b" }}>
           <img src={imgSrc} alt={card.name}
@@ -318,6 +336,13 @@ function CardDetail({ card, onClose }) {
       {card.costLabel && (
         <div style={{ fontSize: 12, color: "#cbd5e1", marginBottom: 8 }}>
           <span style={{ color: "#64748b" }}>Cost:</span> {card.costLabel}
+        </div>
+      )}
+
+      {card.prerequisite && (
+        <div style={{ fontSize: 12, color: "#cbd5e1", marginBottom: 8 }}>
+          <span style={{ color: "#64748b" }}>Prerequisite:</span>{" "}
+          <span style={{ color: "#f59e0b" }}>{card.prerequisite}</span>
         </div>
       )}
 
@@ -378,6 +403,148 @@ function CardDetail({ card, onClose }) {
               </span>
             ))}
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── My Hand panel ────────────────────────────────────────────────────────────
+const MAX_PER_TYPE = 7;  // 7 occupations + 7 minor improvements = 14 total
+
+function isOccupation(card) { return card.type === "Occupation"; }
+function isMinor(card) { return card.type === "MinorImprovement"; }
+
+function handCounts(handCards) {
+  const occ = handCards.filter(isOccupation).length;
+  const minor = handCards.filter(isMinor).length;
+  return { occ, minor };
+}
+
+function canAddToHand(card, handCards) {
+  if (!card) return false;
+  const { occ, minor } = handCounts(handCards);
+  if (isOccupation(card)) return occ < MAX_PER_TYPE;
+  if (isMinor(card)) return minor < MAX_PER_TYPE;
+  return false;  // only occupations and minor improvements allowed
+}
+
+function HandCardRow({ c, selectedId, onSelectCard, onRemove }) {
+  return (
+    <div key={c.id} onClick={() => onSelectCard(c.id)}
+      style={{
+        display: "flex", alignItems: "center", gap: 8, padding: "6px 8px",
+        borderRadius: 8, cursor: "pointer", transition: "all 0.15s",
+        background: c.id === selectedId ? "#1e293b" : "transparent",
+        border: "1px solid", borderColor: c.id === selectedId ? "#334155" : "transparent",
+      }}
+      onMouseEnter={e => { if (c.id !== selectedId) e.currentTarget.style.background = "#1e293b66"; }}
+      onMouseLeave={e => { if (c.id !== selectedId) e.currentTarget.style.background = c.id === selectedId ? "#1e293b" : "transparent"; }}
+    >
+      <span style={{ color: DECK_COLOURS[c.deck] || "#94a3b8", fontSize: 10 }}>{"\u25CF"}</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12, fontWeight: 500, color: "#f1f5f9", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {c.name}
+        </div>
+        <div style={{ fontSize: 10, color: "#64748b" }}>
+          {c.deck}
+          {c.winRatio > 0 && <span style={{ color: "#3b82f6", marginLeft: 4 }}>{(c.winRatio * 100).toFixed(0)}%</span>}
+          {c.pwr > 0 && <span style={{ color: "#a855f7", marginLeft: 4 }}>PWR {c.pwr.toFixed(1)}</span>}
+        </div>
+      </div>
+      <button onClick={e => { e.stopPropagation(); onRemove(c.id); }}
+        style={{
+          background: "none", border: "none", color: "#64748b", fontSize: 14,
+          cursor: "pointer", padding: 2, lineHeight: 1, flexShrink: 0,
+        }}
+        title="Remove from hand"
+      >{"\u2715"}</button>
+    </div>
+  );
+}
+
+function HandPanel({ handIds, allCards, onSelectCard, onRemove, onClear, selectedId }) {
+  const handCards = handIds.map(id => allCards.find(c => c.id === id)).filter(Boolean);
+  const occupations = handCards.filter(isOccupation);
+  const minors = handCards.filter(isMinor);
+  const total = handCards.length;
+
+  return (
+    <div style={{ padding: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: 1 }}>
+          My Hand ({total}/14)
+        </div>
+        {total > 0 && (
+          <button onClick={onClear} style={{
+            background: "none", border: "none", color: "#64748b", fontSize: 10,
+            cursor: "pointer", textDecoration: "underline",
+          }}>Clear all</button>
+        )}
+      </div>
+
+      {total === 0 ? (
+        <div style={{ color: "#475569", fontSize: 12, textAlign: "center", padding: "16px 0", lineHeight: 1.6 }}>
+          No cards in hand yet.
+          <br />Click a card and use "Add to hand" to build your selection.
+          <div style={{ marginTop: 8, fontSize: 10, color: "#334155" }}>7 occupations + 7 minor improvements</div>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          {/* Occupations section */}
+          <div style={{
+            fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: 1,
+            padding: "6px 0 3px", display: "flex", justifyContent: "space-between",
+          }}>
+            <span>{"\uD83D\uDC64"} Occupations</span>
+            <span style={{ color: occupations.length >= MAX_PER_TYPE ? "#f59e0b" : "#475569" }}>{occupations.length}/{MAX_PER_TYPE}</span>
+          </div>
+          {occupations.length === 0 && (
+            <div style={{ fontSize: 11, color: "#334155", padding: "4px 8px", fontStyle: "italic" }}>None selected</div>
+          )}
+          {occupations.map(c => (
+            <HandCardRow key={c.id} c={c} selectedId={selectedId} onSelectCard={onSelectCard} onRemove={onRemove} />
+          ))}
+
+          {/* Minor improvements section */}
+          <div style={{
+            fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: 1,
+            padding: "8px 0 3px", display: "flex", justifyContent: "space-between",
+            borderTop: "1px solid #1e293b", marginTop: 4,
+          }}>
+            <span>{"\uD83D\uDD27"} Minor Improvements</span>
+            <span style={{ color: minors.length >= MAX_PER_TYPE ? "#f59e0b" : "#475569" }}>{minors.length}/{MAX_PER_TYPE}</span>
+          </div>
+          {minors.length === 0 && (
+            <div style={{ fontSize: 11, color: "#334155", padding: "4px 8px", fontStyle: "italic" }}>None selected</div>
+          )}
+          {minors.map(c => (
+            <HandCardRow key={c.id} c={c} selectedId={selectedId} onSelectCard={onSelectCard} onRemove={onRemove} />
+          ))}
+
+          {/* Summary stats */}
+          {total >= 2 && (() => {
+            const avgWin = handCards.reduce((s, c) => s + (c.winRatio || 0), 0) / total;
+            const pwrCards = handCards.filter(c => c.pwr > 0);
+            const avgPwr = pwrCards.length > 0 ? pwrCards.reduce((s, c) => s + c.pwr, 0) / pwrCards.length : 0;
+            return (
+              <div style={{
+                marginTop: 8, padding: "8px 10px", borderRadius: 8,
+                background: "#020617", border: "1px solid #1e293b", fontSize: 11,
+              }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
+                  <span style={{ color: "#64748b" }}>Avg win rate</span>
+                  <span style={{ color: "#3b82f6", fontWeight: 600 }}>{(avgWin * 100).toFixed(1)}%</span>
+                </div>
+                {avgPwr > 0 && (
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "#64748b" }}>Avg PWR</span>
+                    <span style={{ color: "#a855f7", fontWeight: 600 }}>{avgPwr.toFixed(2)}</span>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </div>
       )}
     </div>
@@ -541,6 +708,22 @@ export default function App() {
   const [isRunning, setIsRunning] = useState(false);
   const [sortCol, setSortCol] = useState(null);      // "winRatio" | "playRatio" | "pwr" | null
   const [sortDir, setSortDir] = useState("desc");     // "asc" | "desc"
+
+  // Hand state (max 7 cards)
+  const [handIds, setHandIds] = useState([]);
+  const [showHand, setShowHand] = useState(false);
+
+  const toggleHand = useCallback((id) => {
+    setHandIds(prev => {
+      if (prev.includes(id)) return prev.filter(x => x !== id);
+      // Check per-type limit
+      const card = allCards.find(c => c.id === id);
+      if (!card) return prev;
+      const handCards = prev.map(hid => allCards.find(c => c.id === hid)).filter(Boolean);
+      if (!canAddToHand(card, handCards)) return prev;
+      return [...prev, id];
+    });
+  }, [allCards]);
 
   // Mobile drawer state
   const [showFilters, setShowFilters] = useState(false);
@@ -777,6 +960,23 @@ export default function App() {
             <span style={{ color: "#3b82f6", fontWeight: 600 }}>{filtered.length}</span>/{allCards.length}
           </div>
 
+          {/* Hand toggle */}
+          <button onClick={() => setShowHand(true)} style={{
+            background: handIds.length > 0 ? "#1e293b" : "#0f172a", border: "1px solid #334155", borderRadius: 8,
+            color: handIds.length > 0 ? "#f59e0b" : "#475569", padding: "6px 10px", fontSize: 11, cursor: "pointer",
+            position: "relative",
+          }}>
+            {"\u270B"}
+            {handIds.length > 0 && (
+              <span style={{
+                position: "absolute", top: -4, right: -4,
+                width: 14, height: 14, borderRadius: 99, fontSize: 9, fontWeight: 700,
+                background: "#f59e0b", color: "#0f172a",
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}>{handIds.length}</span>
+            )}
+          </button>
+
           {/* Inspector toggle */}
           <button onClick={() => setShowInspector(true)} style={{
             background: selected ? "#1e293b" : "#0f172a", border: "1px solid #334155", borderRadius: 8,
@@ -856,7 +1056,19 @@ export default function App() {
         </Drawer>
 
         <Drawer open={showInspector} onClose={() => setShowInspector(false)} side="right" title="Card Inspector">
-          <CardDetail card={selected} onClose={() => setShowInspector(false)} />
+          <CardDetail card={selected} onClose={() => setShowInspector(false)}
+            inHand={selected ? handIds.includes(selected.id) : false}
+            onToggleHand={toggleHand} />
+        </Drawer>
+
+        <Drawer open={showHand} onClose={() => setShowHand(false)} side="right" title="My Hand">
+          <HandPanel
+            handIds={handIds} allCards={allCards}
+            onSelectCard={(id) => { setSelectedId(id); setShowHand(false); setShowInspector(true); }}
+            onRemove={(id) => setHandIds(prev => prev.filter(x => x !== id))}
+            onClear={() => setHandIds([])}
+            selectedId={selectedId}
+          />
         </Drawer>
       </div>
     );
@@ -996,12 +1208,51 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── Right sidebar: Card Inspector ── */}
-      <div style={{ width: 260, borderLeft: "1px solid #1e293b", overflow: "auto" }}>
-        <div style={{ padding: "12px 16px", borderBottom: "1px solid #1e293b", fontSize: 12, color: "#64748b", textTransform: "uppercase", letterSpacing: 1 }}>
-          Card Inspector
+      {/* ── Right sidebar: Card Inspector + My Hand ── */}
+      <div style={{ width: 280, borderLeft: "1px solid #1e293b", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        {/* Tab switcher */}
+        <div style={{ display: "flex", borderBottom: "1px solid #1e293b", flexShrink: 0 }}>
+          <button onClick={() => setShowHand(false)}
+            style={{
+              flex: 1, padding: "10px 12px", border: "none", fontSize: 11, cursor: "pointer",
+              textTransform: "uppercase", letterSpacing: 1,
+              background: !showHand ? "#1e293b" : "transparent",
+              color: !showHand ? "#e2e8f0" : "#64748b",
+            }}>Card Inspector</button>
+          <button onClick={() => setShowHand(true)}
+            style={{
+              flex: 1, padding: "10px 12px", border: "none", fontSize: 11, cursor: "pointer",
+              textTransform: "uppercase", letterSpacing: 1,
+              background: showHand ? "#1e293b" : "transparent",
+              color: showHand ? "#f59e0b" : "#64748b",
+              position: "relative",
+            }}>
+            My Hand
+            {handIds.length > 0 && (
+              <span style={{
+                marginLeft: 6, display: "inline-flex", alignItems: "center", justifyContent: "center",
+                width: 18, height: 18, borderRadius: 99, fontSize: 10, fontWeight: 700,
+                background: "#f59e0b22", color: "#f59e0b",
+              }}>{handIds.length}</span>
+            )}
+          </button>
         </div>
-        <CardDetail card={selected} />
+        {/* Panel body */}
+        <div style={{ flex: 1, overflow: "auto" }}>
+          {showHand ? (
+            <HandPanel
+              handIds={handIds} allCards={allCards}
+              onSelectCard={(id) => { setSelectedId(id); setShowHand(false); }}
+              onRemove={(id) => setHandIds(prev => prev.filter(x => x !== id))}
+              onClear={() => setHandIds([])}
+              selectedId={selectedId}
+            />
+          ) : (
+            <CardDetail card={selected}
+              inHand={selected ? handIds.includes(selected.id) : false}
+              onToggleHand={toggleHand} />
+          )}
+        </div>
       </div>
     </div>
   );
