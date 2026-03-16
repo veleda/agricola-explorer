@@ -1,0 +1,9 @@
+__pycache__
+*.pyc
+node_modules
+ui/dist
+ui/node_modules
+.git
+out.ttl
+fts
+f5-agricola-rulebook.pdf

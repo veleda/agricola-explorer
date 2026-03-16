@@ -1,0 +1,21 @@
+PREFIX : <http://veronahe.no/agricola/>
+PREFIX def: <urn:maplib_default:>
+
+# CQ2: Which cards give you the best win ratio relative to their resource cost?
+# Joins the card with its CostPermutation to sum total building resources spent.
+
+SELECT ?name ?costLabel ?winRatio ?totalCost
+WHERE {
+  ?card rdfs:label ?name ;
+        :hasCost ?cost ;
+        def:win_ratio ?winRatio .
+  ?cost rdfs:label ?costLabel .
+  OPTIONAL { ?cost :clay ?c }
+  OPTIONAL { ?cost :wood ?w }
+  OPTIONAL { ?cost :stone ?s }
+  OPTIONAL { ?cost :reed ?r }
+  BIND(COALESCE(?c,0) + COALESCE(?w,0) + COALESCE(?s,0) + COALESCE(?r,0) AS ?totalCost)
+  FILTER(?totalCost > 0)
+}
+ORDER BY DESC(?winRatio / ?totalCost)
+LIMIT 15

@@ -1,0 +1,102 @@
+@prefix def: <urn:maplib_default:> .
+@prefix ottr: <http://ns.ottr.xyz/0.4/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix : <http://veronahe.no/agricola/> .
+
+:Card [
+    ? xsd:string ?Card_ID,
+     xsd:string ?Name,
+    ? ottr:IRI ?Type,
+    ? xsd:string ?Deck,
+    ? xsd:string ?Players,
+    ? xsd:string ?Cost,
+    ? xsd:string ?Prerequisite,
+    ? xsd:string ?Card_Text,
+    ? xsd:string ?Bonus_Points,
+    ? xsd:boolean ?banned,
+    ? xsd:boolean ?is_no,
+    ? xsd:double ?dealt,
+    ? xsd:double ?drafted,
+    ? xsd:double ?played,
+    ? xsd:double ?won,
+    ? xsd:double ?ADP,
+    ? xsd:double ?play_ratio,
+    ? xsd:double ?win_ratio,
+    ? xsd:double ?PWR,
+    ? xsd:double ?PWR_no_log,
+    ? xsd:string ?PWR_normalized,
+    ? ottr:IRI ?hasCost,
+    ? xsd:string ?cost_label,
+    ? xsd:integer ?cost_clay,
+    ? xsd:integer ?cost_stone,
+    ? xsd:integer ?cost_reed,
+    ? xsd:integer ?cost_wood,
+    ? xsd:integer ?cost_food,
+    ? xsd:integer ?cost_grain,
+    ? xsd:integer ?cost_vegetable,
+    ? ottr:IRI ?cost_special,
+     ottr:IRI ?subject ] :: {
+  ottr:Triple(?Type, rdf:type, owl:Class ),
+  ottr:Triple(?subject, :id, ?Card_ID) ,
+  ottr:Triple(?subject, rdfs:label, ?Name) ,
+  ottr:Triple(?subject, rdf:type, ?Type) ,
+  ottr:Triple(?subject, def:Deck, ?Deck) ,
+  ottr:Triple(?subject, def:Players, ?Players) ,
+  ottr:Triple(?subject, def:Prerequisite, ?Prerequisite) ,
+  ottr:Triple(?subject, def:Card_Text, ?Card_Text) ,
+  ottr:Triple(?subject, :bonusPoints, ?Bonus_Points) ,
+  ottr:Triple(?subject, :banned, ?banned) ,
+  ottr:Triple(?subject, def:is_no, ?is_no) ,
+  ottr:Triple(?subject, def:dealt, ?dealt) ,
+  ottr:Triple(?subject, def:drafted, ?drafted) ,
+  ottr:Triple(?subject, def:played, ?played) ,
+  ottr:Triple(?subject, def:won, ?won) ,
+  ottr:Triple(?subject, def:ADP, ?ADP) ,
+  ottr:Triple(?subject, def:play_ratio, ?play_ratio) ,
+  ottr:Triple(?subject, def:win_ratio, ?win_ratio) ,
+  ottr:Triple(?subject, def:PWR, ?PWR) ,
+  ottr:Triple(?subject, def:PWR_no_log, ?PWR_no_log) ,
+  ottr:Triple(?subject, def:PWR_normalized, ?PWR_normalized),
+  ottr:Triple(?subject, :hasCost, ?hasCost),
+} .
+
+:CardGain [
+     ottr:IRI ?subject,
+     ottr:IRI ?gain ] :: {
+  ottr:Triple(?subject, :gains, ?gain),
+} .
+
+:CardAffect [
+     ottr:IRI ?subject,
+     ottr:IRI ?affect ] :: {
+  ottr:Triple(?subject, :affects, ?affect),
+} .
+
+:CardRelation [
+     ottr:IRI ?subject,
+     ottr:IRI ?relation ] :: {
+  ottr:Triple(?subject, :relatedTo, ?relation),
+} .
+
+:CostPermutation [
+     ottr:IRI ?subject,
+    ? xsd:string ?label,
+    ? xsd:integer ?clay,
+    ? xsd:integer ?stone,
+    ? xsd:integer ?reed,
+    ? xsd:integer ?wood,
+    ? xsd:integer ?food,
+    ? xsd:integer ?grain,
+    ? xsd:integer ?vegetable,
+    ? ottr:IRI ?costValue ] :: {
+  ottr:Triple(?subject, rdf:type, :CostPermutation),
+  ottr:Triple(?subject, rdfs:label, ?label),
+  ottr:Triple(?subject, :clay, ?clay),
+  ottr:Triple(?subject, :stone, ?stone),
+  ottr:Triple(?subject, :reed, ?reed),
+  ottr:Triple(?subject, :wood, ?wood),
+  ottr:Triple(?subject, :food, ?food),
+  ottr:Triple(?subject, :grain, ?grain),
+  ottr:Triple(?subject, :vegetable, ?vegetable),
+  ottr:Triple(?subject, :costValue, ?costValue),
+} .

@@ -1,0 +1,15 @@
+PREFIX : <http://veronahe.no/agricola/>
+PREFIX def: <urn:maplib_default:>
+
+# CQ4: Which cards provide the most distinct types of gains?
+# Finds "Swiss army knife" cards that touch many resource/action types at once.
+
+SELECT ?name ?deck (COUNT(DISTINCT ?gain) AS ?gainCount)
+WHERE {
+  ?card :gains ?gain ;
+        rdfs:label ?name ;
+        def:Deck ?deck .
+}
+GROUP BY ?name ?deck
+ORDER BY DESC(?gainCount)
+LIMIT 15
