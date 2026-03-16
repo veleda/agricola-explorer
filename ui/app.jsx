@@ -258,8 +258,8 @@ function CardDetail({ card }) {
   );
 
   const barW = Math.round(card.winRatio * 200);
-  // Upgrade http → https for image URLs to avoid mixed-content blocking
-  const imgSrc = card.imageUrl ? card.imageUrl.replace(/^http:\/\//, "https://") : null;
+  // Route images through our backend proxy to avoid mixed-content blocking
+  const imgSrc = card.imageUrl ? `${API_BASE}/api/imgproxy?url=${encodeURIComponent(card.imageUrl)}` : null;
 
   return (
     <div style={{ padding: 16 }}>

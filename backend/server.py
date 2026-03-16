@@ -12,10 +12,13 @@ import os
 import sys
 import time
 import json
+import hashlib
+from urllib.parse import unquote
 
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -171,6 +174,54 @@ def _format_value(val) -> str:
     if s.startswith(NS):
         s = ":" + s[len(NS):]
     return s
+
+# ── Image proxy (avoids mixed-content blocking) ─────────────────────────────
+
+ALLOWED_IMAGE_HOSTS = {"play-agricola.com", "www.play-agricola.com"}
+_http_client: httpx.AsyncClient | None = None
+
+async def _get_http_client() -> httpx.AsyncClient:
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(
+            timeout=15.0,
+            follow_redirects=True,
+            headers={"User-Agent": "AgricolaExplorer/1.0"},
+        )
+    return _http_client
+
+@app.get("/api/imgproxy")
+async def image_proxy(url: str = ""):
+    """Proxy card images from play-agricola.com to avoid mixed-content issues."""
+    url = unquote(url)
+    if not url:
+        return JSONResponse(status_code=400, content={"error": "missing url param"})
+
+    # Security: only proxy from known image hosts
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    if host not in ALLOWED_IMAGE_HOSTS:
+        return JSONResponse(status_code=403, content={"error": f"host not allowed: {host}"})
+
+    try:
+        client = await _get_http_client()
+        resp = await client.get(url)
+        resp.raise_for_status()
+
+        content_type = resp.headers.get("content-type", "image/jpeg")
+        return Response(
+            content=resp.content,
+            media_type=content_type,
+            headers={
+                "Cache-Control": "public, max-age=86400",  # cache 24h
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
+    except httpx.HTTPStatusError as e:
+        return JSONResponse(status_code=e.response.status_code, content={"error": str(e)})
+    except Exception as e:
+        return JSONResponse(status_code=502, content={"error": str(e)})
 
 # ── Serve static frontend (after build) ─────────────────────────────────────
 
