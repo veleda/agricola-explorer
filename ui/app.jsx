@@ -145,9 +145,9 @@ function GraphView({ cards, onSelectCard, selectedId, onOverflow }) {
 
     node.filter(d => d.nodeType === "card").append("circle")
       .attr("r", d => 6 + (d.winRatio || 0) * 20)
-      .attr("fill", d => DECK_COLOURS[d.deck] || "#94a3b8")
-      .attr("stroke", d => d.id === selectedId ? "#fff" : "transparent")
-      .attr("stroke-width", 3).attr("opacity", 0.85);
+      .attr("fill", d => d.banned ? "#991b1b" : (DECK_COLOURS[d.deck] || "#94a3b8"))
+      .attr("stroke", d => d.id === selectedId ? "#fff" : d.banned ? "#dc2626" : "transparent")
+      .attr("stroke-width", 3).attr("opacity", d => d.banned ? 0.9 : 0.85);
 
     node.filter(d => d.nodeType === "gain").append("rect")
       .attr("x", -8).attr("y", -8).attr("width", 16).attr("height", 16).attr("rx", 3)
@@ -267,7 +267,10 @@ function CardDetail({ card }) {
         <span style={{ fontSize: 22 }}>{TYPE_ICONS[card.type]}</span>
         <div>
           <div style={{ fontSize: 16, fontWeight: 700, color: "#f1f5f9" }}>{card.name}</div>
-          <div style={{ fontSize: 11, color: "#94a3b8" }}>{card.type.replace(/([A-Z])/g, " $1").trim()} · Deck {card.deck}</div>
+          <div style={{ fontSize: 11, color: "#94a3b8" }}>
+            {card.type.replace(/([A-Z])/g, " $1").trim()} · Deck {card.deck}
+            {card.banned && <span style={{ marginLeft: 6, color: "#dc2626", fontWeight: 600 }}>BANNED</span>}
+          </div>
         </div>
       </div>
 
@@ -731,14 +734,17 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sorted.map(c => (
+                  {sorted.map(c => {
+                    const bannedBg = c.banned ? "#450a0a" : "transparent";
+                    const rowBg = c.id === selectedId ? (c.banned ? "#5c1010" : "#1e293b") : bannedBg;
+                    return (
                     <tr key={c.id} onClick={() => setSelectedId(c.id)}
                       style={{
                         borderBottom: "1px solid #1e293b11", cursor: "pointer",
-                        background: c.id === selectedId ? "#1e293b" : "transparent",
+                        background: rowBg,
                       }}
-                      onMouseEnter={e => { if (c.id !== selectedId) e.currentTarget.style.background = "#1e293b66"; }}
-                      onMouseLeave={e => { if (c.id !== selectedId) e.currentTarget.style.background = "transparent"; }}
+                      onMouseEnter={e => { if (c.id !== selectedId) e.currentTarget.style.background = c.banned ? "#5c1010" : "#1e293b66"; }}
+                      onMouseLeave={e => { if (c.id !== selectedId) e.currentTarget.style.background = bannedBg; }}
                     >
                       <td style={{ padding: "6px", fontWeight: 500, color: "#f1f5f9" }}>
                         <span style={{ color: DECK_COLOURS[c.deck] || "#94a3b8", marginRight: 4 }}>●</span>{c.name}
@@ -765,7 +771,7 @@ export default function App() {
                         </div>
                       </td>
                     </tr>
-                  ))}
+                  );})}
                 </tbody>
               </table>
             </div>
