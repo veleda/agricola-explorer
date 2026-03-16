@@ -5,22 +5,20 @@
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 
+:Cost a owl:Class ;
+    rdfs:label "Cost"@en .
 
-:Clay a rdfs:Datatype ;
-    rdfs:label "clay"@en ;
-    rdfs:isDefinedBy xsd:integer .
+:Clay a :Cost ;
+    rdfs:label "clay"@en .
 
-:Wood a rdfs:Datatype ;
-    rdfs:label "wood"@en ;
-    rdfs:isDefinedBy xsd:integer .
+:Wood a :Cost ;
+    rdfs:label "wood"@en .
 
-:Stone a rdfs:Datatype ;
-    rdfs:label "stone"@en ;
-    rdfs:isDefinedBy xsd:integer .
+:Stone a :Cost ;
+    rdfs:label "stone"@en .
 
-:Reed a rdfs:Datatype ;
-    rdfs:label "reed"@en ;
-    rdfs:isDefinedBy xsd:integer .
+:Reed a :Cost ;
+    rdfs:label "reed"@en .
 
 :CardCateogry a owl:Class .
 

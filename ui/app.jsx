@@ -94,13 +94,16 @@ const GRAPH_MAX_CARDS = 300;
 
 function GraphView({ cards, onSelectCard, selectedId, onOverflow }) {
   const svgRef = useRef(null);
+  const circlesRef = useRef(null);  // store d3 selection for highlight updates
   const tooMany = cards.length > GRAPH_MAX_CARDS;
 
+  // ── Build the graph only when cards change (NOT on selection) ──────────
   useEffect(() => {
     if (tooMany || !svgRef.current || cards.length === 0) return;
 
     const svg = d3.select(svgRef.current);
     svg.selectAll("*").remove();
+    circlesRef.current = null;
     const width = svgRef.current.clientWidth;
     const height = svgRef.current.clientHeight;
 
@@ -156,11 +159,14 @@ function GraphView({ cards, onSelectCard, selectedId, onOverflow }) {
       )
       .on("click", (e, d) => { if (d.nodeType === "card") onSelectCard(d.id); });
 
-    node.filter(d => d.nodeType === "card").append("circle")
+    const circles = node.filter(d => d.nodeType === "card").append("circle")
       .attr("r", d => 6 + (d.winRatio || 0) * 20)
       .attr("fill", d => d.banned ? "#991b1b" : (DECK_COLOURS[d.deck] || "#94a3b8"))
-      .attr("stroke", d => d.id === selectedId ? "#fff" : d.banned ? "#dc2626" : "transparent")
+      .attr("stroke", d => d.banned ? "#dc2626" : "transparent")
       .attr("stroke-width", 3).attr("opacity", d => d.banned ? 0.9 : 0.85);
+
+    // Store reference so the highlight effect can update strokes without rebuilding
+    circlesRef.current = circles;
 
     node.filter(d => d.nodeType === "gain").append("rect")
       .attr("x", -8).attr("y", -8).attr("width", 16).attr("height", 16).attr("rx", 3)
@@ -189,7 +195,14 @@ function GraphView({ cards, onSelectCard, selectedId, onOverflow }) {
     });
 
     return () => sim.stop();
-  }, [cards, selectedId, onSelectCard]);
+  }, [cards, onSelectCard]);
+
+  // ── Lightweight highlight update — no simulation restart ──────────────
+  useEffect(() => {
+    if (!circlesRef.current) return;
+    circlesRef.current
+      .attr("stroke", d => d.id === selectedId ? "#fff" : d.banned ? "#dc2626" : "transparent");
+  }, [selectedId]);
 
   if (tooMany) {
     return (
