@@ -463,6 +463,8 @@ export default function App() {
   const [sparqlEdited, setSparqlEdited] = useState(false);
   const [queryResult, setQueryResult] = useState(null);
   const [isRunning, setIsRunning] = useState(false);
+  const [sortCol, setSortCol] = useState(null);      // "winRatio" | "playRatio" | "pwr" | null
+  const [sortDir, setSortDir] = useState("desc");     // "asc" | "desc"
 
   // ── Load data from backend on mount ────────────────────────────────────
   useEffect(() => {
@@ -533,6 +535,22 @@ export default function App() {
     if (limit !== "all") cards = cards.slice(0, limit);
     return cards;
   }, [allCards, filters, limit]);
+
+  const toggleSort = useCallback((col) => {
+    if (sortCol === col) {
+      setSortDir(d => d === "desc" ? "asc" : "desc");
+    } else {
+      setSortCol(col);
+      setSortDir("desc");
+    }
+  }, [sortCol]);
+
+  // Apply sorting to filtered cards
+  const sorted = useMemo(() => {
+    if (!sortCol) return filtered;
+    const dir = sortDir === "desc" ? -1 : 1;
+    return [...filtered].sort((a, b) => ((a[sortCol] || 0) - (b[sortCol] || 0)) * dir);
+  }, [filtered, sortCol, sortDir]);
 
   const applyPreset = (preset) => {
     setSparqlEdited(false);
@@ -697,14 +715,23 @@ export default function App() {
                     <th style={{ padding: "8px 6px" }}>Card</th>
                     <th style={{ padding: "8px 6px" }}>Deck</th>
                     <th style={{ padding: "8px 6px" }}>Type</th>
-                    <th style={{ padding: "8px 6px" }}>Win %</th>
-                    <th style={{ padding: "8px 6px" }}>Play %</th>
-                    <th style={{ padding: "8px 6px" }}>PWR</th>
+                    {[["winRatio", "Win %"], ["playRatio", "Play %"], ["pwr", "PWR"]].map(([key, label]) => (
+                      <th key={key} onClick={() => toggleSort(key)}
+                        style={{ padding: "8px 6px", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}
+                        onMouseEnter={e => e.currentTarget.style.color = "#e2e8f0"}
+                        onMouseLeave={e => e.currentTarget.style.color = sortCol === key ? "#3b82f6" : "#64748b"}
+                      >
+                        <span style={{ color: sortCol === key ? "#3b82f6" : "inherit" }}>{label}</span>
+                        <span style={{ marginLeft: 4, fontSize: 10, opacity: sortCol === key ? 1 : 0.3 }}>
+                          {sortCol === key ? (sortDir === "desc" ? "\u25BC" : "\u25B2") : "\u25BC"}
+                        </span>
+                      </th>
+                    ))}
                     <th style={{ padding: "8px 6px" }}>Gains</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map(c => (
+                  {sorted.map(c => (
                     <tr key={c.id} onClick={() => setSelectedId(c.id)}
                       style={{
                         borderBottom: "1px solid #1e293b11", cursor: "pointer",
