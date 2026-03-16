@@ -23,6 +23,19 @@ async function runSparql(query) {
   return res.json();
 }
 
+// ── Responsive hook ────────────────────────────────────────────────────────
+function useIsMobile(breakpoint = 768) {
+  const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth < breakpoint);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${breakpoint - 1}px)`);
+    const handler = (e) => setIsMobile(e.matches);
+    mq.addEventListener("change", handler);
+    setIsMobile(mq.matches);
+    return () => mq.removeEventListener("change", handler);
+  }, [breakpoint]);
+  return isMobile;
+}
+
 // ── Colour palette ──────────────────────────────────────────────────────────
 const DECK_COLOURS = {
   E: "#3b82f6", I: "#8b5cf6", K: "#ec4899", Major: "#f59e0b",
@@ -250,7 +263,7 @@ function RangeFilter({ label, min, max, value, onChange, step = 0.01 }) {
 }
 
 // ── Card detail panel ───────────────────────────────────────────────────────
-function CardDetail({ card }) {
+function CardDetail({ card, onClose }) {
   if (!card) return (
     <div style={{ padding: 24, color: "#64748b", fontSize: 13, textAlign: "center" }}>
       Click a card node or table row to inspect it.
@@ -263,6 +276,12 @@ function CardDetail({ card }) {
 
   return (
     <div style={{ padding: 16 }}>
+      {onClose && (
+        <button onClick={onClose} style={{
+          float: "right", background: "none", border: "none", color: "#64748b",
+          fontSize: 18, cursor: "pointer", padding: 4, lineHeight: 1,
+        }}>{"\u2715"}</button>
+      )}
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
         <span style={{ fontSize: 22 }}>{TYPE_ICONS[card.type]}</span>
         <div>
@@ -445,9 +464,50 @@ function SparqlEditor({ sparql, onChange, onRun, queryResult, isRunning }) {
   );
 }
 
+// ── Overlay / Drawer for mobile panels ──────────────────────────────────────
+function Drawer({ open, onClose, side, children, title }) {
+  if (!open) return null;
+  return (
+    <>
+      {/* Backdrop */}
+      <div onClick={onClose} style={{
+        position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 90,
+      }} />
+      {/* Panel */}
+      <div style={{
+        position: "fixed", top: 0, bottom: 0, zIndex: 100,
+        [side]: 0,
+        width: "min(320px, 85vw)",
+        background: "#0f172a", borderRight: side === "left" ? "1px solid #1e293b" : "none",
+        borderLeft: side === "right" ? "1px solid #1e293b" : "none",
+        display: "flex", flexDirection: "column", overflow: "hidden",
+        boxShadow: "0 0 40px rgba(0,0,0,0.5)",
+      }}>
+        {/* Drawer header */}
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          padding: "12px 16px", borderBottom: "1px solid #1e293b",
+        }}>
+          <span style={{ fontSize: 14, fontWeight: 600, color: "#e2e8f0" }}>{title}</span>
+          <button onClick={onClose} style={{
+            background: "none", border: "none", color: "#64748b", fontSize: 18,
+            cursor: "pointer", padding: 4, lineHeight: 1,
+          }}>{"\u2715"}</button>
+        </div>
+        {/* Drawer body */}
+        <div style={{ flex: 1, overflow: "auto" }}>
+          {children}
+        </div>
+      </div>
+    </>
+  );
+}
+
 
 // ── Main App ────────────────────────────────────────────────────────────────
 export default function App() {
+  const isMobile = useIsMobile();
+
   // Data from backend
   const [allCards, setAllCards] = useState([]);
   const [meta, setMeta] = useState({ gains: [], affects: [], decks: [], types: [], totalCards: 0 });
@@ -468,6 +528,16 @@ export default function App() {
   const [isRunning, setIsRunning] = useState(false);
   const [sortCol, setSortCol] = useState(null);      // "winRatio" | "playRatio" | "pwr" | null
   const [sortDir, setSortDir] = useState("desc");     // "asc" | "desc"
+
+  // Mobile drawer state
+  const [showFilters, setShowFilters] = useState(false);
+  const [showInspector, setShowInspector] = useState(false);
+
+  // Auto-open inspector on mobile when a card is selected
+  const handleSelectCard = useCallback((id) => {
+    setSelectedId(id);
+    if (isMobile) setShowInspector(true);
+  }, [isMobile]);
 
   // ── Load data from backend on mount ────────────────────────────────────
   useEffect(() => {
@@ -572,19 +642,19 @@ export default function App() {
   if (loading) {
     return (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#0f172a", color: "#e2e8f0", fontFamily: "Inter, system-ui, sans-serif" }}>
-        <div style={{ textAlign: "center" }}>
-          <div style={{ fontSize: 32, marginBottom: 12 }}>Loading knowledge graph...</div>
+        <div style={{ textAlign: "center", padding: 24 }}>
+          <div style={{ fontSize: isMobile ? 22 : 32, marginBottom: 12 }}>Loading knowledge graph...</div>
           <div style={{ fontSize: 14, color: "#64748b" }}>Building RDF model from {meta.totalCards || "1354"} cards</div>
         </div>
       </div>
     );
   }
 
-  return (
-    <div style={{ display: "flex", height: "100vh", background: "#0f172a", color: "#e2e8f0", fontFamily: "Inter, system-ui, sans-serif" }}>
-
-      {/* ── Left sidebar: Query Builder ── */}
-      <div style={{ width: 280, borderRight: "1px solid #1e293b", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+  // ── Sidebar content (shared between desktop sidebar and mobile drawer) ─
+  const filterContent = (
+    <>
+      {/* Header (desktop only — drawer has its own) */}
+      {!isMobile && (
         <div style={{ padding: "16px 16px 8px", borderBottom: "1px solid #1e293b" }}>
           <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: -0.5 }}>
             <span style={{ color: "#f59e0b" }}>Agricola</span> Explorer
@@ -593,65 +663,199 @@ export default function App() {
             Knowledge Graph · {allCards.length} cards
           </div>
         </div>
+      )}
 
-        {/* Presets */}
-        <div style={{ padding: "12px 16px 4px" }}>
-          <div style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>Preset Queries</div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-            {PRESET_QUERIES.map(p => (
-              <button key={p.label} onClick={() => applyPreset(p)} title={p.description}
+      {/* Presets */}
+      <div style={{ padding: "12px 16px 4px" }}>
+        <div style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>Preset Queries</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+          {PRESET_QUERIES.map(p => (
+            <button key={p.label} onClick={() => { applyPreset(p); if (isMobile) setShowFilters(false); }} title={p.description}
+              style={{
+                padding: "3px 10px", borderRadius: 99, border: "1px solid #334155",
+                background: "transparent", color: "#cbd5e1", fontSize: 11,
+                cursor: "pointer", transition: "all 0.15s",
+              }}
+              onMouseEnter={e => { e.target.style.borderColor = "#f59e0b"; e.target.style.color = "#f59e0b"; }}
+              onMouseLeave={e => { e.target.style.borderColor = "#334155"; e.target.style.color = "#cbd5e1"; }}
+            >{p.label}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div style={{ flex: 1, overflow: "auto", padding: "8px 16px" }}>
+        <ChipSelect label="Gains" options={meta.gains} selected={filters.gains} onToggle={v => toggle("gains", v)} colour="#10b981" />
+        <ChipSelect label="Affects" options={meta.affects} selected={filters.affects} onToggle={v => toggle("affects", v)} colour="#f59e0b" />
+        <ChipSelect label="Deck" options={meta.decks} selected={filters.decks} onToggle={v => toggle("decks", v)} colour="#8b5cf6" />
+        <ChipSelect label="Type" options={meta.types} selected={filters.types} onToggle={v => toggle("types", v)} colour="#ec4899" />
+        <RangeFilter label="Win Ratio" min={0} max={1} value={filters.winRange} onChange={v => { setSparqlEdited(false); setFilters(f => ({ ...f, winRange: v })); }} />
+        <RangeFilter label="Play Ratio" min={0} max={1} value={filters.playRange} onChange={v => { setSparqlEdited(false); setFilters(f => ({ ...f, playRange: v })); }} />
+      </div>
+
+      {/* SPARQL toggle + limit */}
+      <div style={{ borderTop: "1px solid #1e293b", padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+        {/* Result limit */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 11, color: "#64748b", textTransform: "uppercase", letterSpacing: 1 }}>Limit</span>
+          <div style={{ display: "flex", gap: 4 }}>
+            {[10, 20, 50, 100, "all"].map(n => (
+              <button key={n} onClick={() => { setLimit(n); setSparqlEdited(false); }}
                 style={{
-                  padding: "3px 10px", borderRadius: 99, border: "1px solid #334155",
-                  background: "transparent", color: "#cbd5e1", fontSize: 11,
-                  cursor: "pointer", transition: "all 0.15s",
-                }}
-                onMouseEnter={e => { e.target.style.borderColor = "#f59e0b"; e.target.style.color = "#f59e0b"; }}
-                onMouseLeave={e => { e.target.style.borderColor = "#334155"; e.target.style.color = "#cbd5e1"; }}
-              >{p.label}</button>
+                  padding: "3px 10px", borderRadius: 6, border: "1px solid",
+                  borderColor: limit === n ? "#3b82f6" : "#334155",
+                  background: limit === n ? "#3b82f622" : "transparent",
+                  color: limit === n ? "#3b82f6" : "#64748b",
+                  fontSize: 11, cursor: "pointer", transition: "all 0.15s",
+                  textTransform: n === "all" ? "uppercase" : "none",
+                }}>{n === "all" ? "All" : n}</button>
             ))}
           </div>
         </div>
 
-        {/* Filters */}
-        <div style={{ flex: 1, overflow: "auto", padding: "8px 16px" }}>
-          <ChipSelect label="Gains" options={meta.gains} selected={filters.gains} onToggle={v => toggle("gains", v)} colour="#10b981" />
-          <ChipSelect label="Affects" options={meta.affects} selected={filters.affects} onToggle={v => toggle("affects", v)} colour="#f59e0b" />
-          <ChipSelect label="Deck" options={meta.decks} selected={filters.decks} onToggle={v => toggle("decks", v)} colour="#8b5cf6" />
-          <ChipSelect label="Type" options={meta.types} selected={filters.types} onToggle={v => toggle("types", v)} colour="#ec4899" />
-          <RangeFilter label="Win Ratio" min={0} max={1} value={filters.winRange} onChange={v => { setSparqlEdited(false); setFilters(f => ({ ...f, winRange: v })); }} />
-          <RangeFilter label="Play Ratio" min={0} max={1} value={filters.playRange} onChange={v => { setSparqlEdited(false); setFilters(f => ({ ...f, playRange: v })); }} />
-        </div>
+        <button onClick={() => setShowSparql(s => !s)}
+          style={{
+            width: "100%", padding: "8px 12px", borderRadius: 8, border: "1px solid #334155",
+            background: showSparql ? "#1e293b" : "transparent", color: "#94a3b8",
+            fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
+          }}>
+          <span style={{ fontFamily: "monospace", fontSize: 14, color: "#3b82f6" }}>&lt;/&gt;</span>
+          {showSparql ? "Hide" : "Show"} SPARQL Editor
+        </button>
+      </div>
+    </>
+  );
 
-        {/* SPARQL toggle + limit */}
-        <div style={{ borderTop: "1px solid #1e293b", padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
-          {/* Result limit */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 11, color: "#64748b", textTransform: "uppercase", letterSpacing: 1 }}>Limit</span>
-            <div style={{ display: "flex", gap: 4 }}>
-              {[10, 20, 50, 100, "all"].map(n => (
-                <button key={n} onClick={() => { setLimit(n); setSparqlEdited(false); }}
-                  style={{
-                    padding: "3px 10px", borderRadius: 6, border: "1px solid",
-                    borderColor: limit === n ? "#3b82f6" : "#334155",
-                    background: limit === n ? "#3b82f622" : "transparent",
-                    color: limit === n ? "#3b82f6" : "#64748b",
-                    fontSize: 11, cursor: "pointer", transition: "all 0.15s",
-                    textTransform: n === "all" ? "uppercase" : "none",
-                  }}>{n === "all" ? "All" : n}</button>
-              ))}
-            </div>
+  // ── MOBILE LAYOUT ─────────────────────────────────────────────────────
+  if (isMobile) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: "#0f172a", color: "#e2e8f0", fontFamily: "Inter, system-ui, sans-serif" }}>
+
+        {/* Mobile header */}
+        <div style={{
+          display: "flex", alignItems: "center", padding: "10px 12px",
+          borderBottom: "1px solid #1e293b", gap: 8, flexShrink: 0,
+        }}>
+          {/* Hamburger / Filters */}
+          <button onClick={() => setShowFilters(true)} style={{
+            background: "#1e293b", border: "1px solid #334155", borderRadius: 8,
+            color: "#e2e8f0", padding: "6px 10px", fontSize: 13, cursor: "pointer",
+            display: "flex", alignItems: "center", gap: 4,
+          }}>
+            <span style={{ fontSize: 16 }}>{"\u2630"}</span>
+            <span style={{ fontSize: 11 }}>Filters</span>
+          </button>
+
+          {/* View toggle */}
+          <div style={{ display: "flex", background: "#1e293b", borderRadius: 8, overflow: "hidden" }}>
+            {["graph", "table"].map(v => (
+              <button key={v} onClick={() => setView(v)}
+                style={{
+                  padding: "6px 12px", border: "none", fontSize: 11, cursor: "pointer",
+                  background: view === v ? "#334155" : "transparent",
+                  color: view === v ? "#f1f5f9" : "#64748b",
+                  textTransform: "capitalize",
+                }}>{v}</button>
+            ))}
           </div>
 
-          <button onClick={() => setShowSparql(s => !s)}
-            style={{
-              width: "100%", padding: "8px 12px", borderRadius: 8, border: "1px solid #334155",
-              background: showSparql ? "#1e293b" : "transparent", color: "#94a3b8",
-              fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
-            }}>
-            <span style={{ fontFamily: "monospace", fontSize: 14, color: "#3b82f6" }}>&lt;/&gt;</span>
-            {showSparql ? "Hide" : "Show"} SPARQL Editor
+          {/* Card count */}
+          <div style={{ fontSize: 11, color: "#64748b", marginLeft: "auto" }}>
+            <span style={{ color: "#3b82f6", fontWeight: 600 }}>{filtered.length}</span>/{allCards.length}
+          </div>
+
+          {/* Inspector toggle */}
+          <button onClick={() => setShowInspector(true)} style={{
+            background: selected ? "#1e293b" : "#0f172a", border: "1px solid #334155", borderRadius: 8,
+            color: selected ? "#3b82f6" : "#475569", padding: "6px 10px", fontSize: 11, cursor: "pointer",
+          }}>
+            {"\uD83D\uDD0D"}
           </button>
         </div>
+
+        {/* SPARQL Editor (below header on mobile too) */}
+        {showSparql && (
+          <SparqlEditor
+            sparql={sparql}
+            onChange={handleSparqlChange}
+            onRun={handleRun}
+            queryResult={queryResult}
+            isRunning={isRunning}
+          />
+        )}
+
+        {/* Main content */}
+        <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
+          {view === "graph" ? (
+            <GraphView cards={filtered} onSelectCard={handleSelectCard} selectedId={selectedId} onOverflow={() => setView("table")} />
+          ) : (
+            <div style={{ overflow: "auto", height: "100%", padding: "0 8px 8px" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                <thead>
+                  <tr style={{ borderBottom: "1px solid #1e293b", color: "#64748b", textAlign: "left" }}>
+                    <th style={{ padding: "6px 4px", position: "sticky", top: 0, background: "#0f172a", zIndex: 1 }}>Card</th>
+                    <th style={{ padding: "6px 4px", position: "sticky", top: 0, background: "#0f172a", zIndex: 1 }}>Dk</th>
+                    {[["winRatio", "Win"], ["playRatio", "Play"], ["pwr", "PWR"]].map(([key, label]) => (
+                      <th key={key} onClick={() => toggleSort(key)}
+                        style={{
+                          padding: "6px 4px", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap",
+                          position: "sticky", top: 0, background: "#0f172a", zIndex: 1,
+                        }}>
+                        <span style={{ color: sortCol === key ? "#3b82f6" : "inherit" }}>{label}</span>
+                        <span style={{ marginLeft: 2, fontSize: 8, opacity: sortCol === key ? 1 : 0.3 }}>
+                          {sortCol === key ? (sortDir === "desc" ? "\u25BC" : "\u25B2") : "\u25BC"}
+                        </span>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {sorted.map(c => {
+                    const bannedBg = c.banned ? "#450a0a" : "transparent";
+                    const rowBg = c.id === selectedId ? (c.banned ? "#5c1010" : "#1e293b") : bannedBg;
+                    return (
+                    <tr key={c.id} onClick={() => handleSelectCard(c.id)}
+                      style={{ borderBottom: "1px solid #1e293b11", cursor: "pointer", background: rowBg }}>
+                      <td style={{ padding: "5px 4px", fontWeight: 500, color: "#f1f5f9", maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        <span style={{ color: DECK_COLOURS[c.deck] || "#94a3b8", marginRight: 3 }}>{"\u25CF"}</span>{c.name}
+                      </td>
+                      <td style={{ padding: "5px 4px", color: "#94a3b8" }}>{c.deck}</td>
+                      <td style={{ padding: "5px 4px", fontVariantNumeric: "tabular-nums", color: c.winRatio > 0.33 ? "#10b981" : "#94a3b8" }}>
+                        {(c.winRatio * 100).toFixed(0)}%
+                      </td>
+                      <td style={{ padding: "5px 4px", fontVariantNumeric: "tabular-nums", color: "#94a3b8" }}>
+                        {(c.playRatio * 100).toFixed(0)}%
+                      </td>
+                      <td style={{ padding: "5px 4px", fontVariantNumeric: "tabular-nums", color: c.pwr > 2 ? "#a855f7" : "#94a3b8" }}>
+                        {c.pwr > 0 ? c.pwr.toFixed(1) : "–"}
+                      </td>
+                    </tr>
+                  );})}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        {/* Mobile drawers */}
+        <Drawer open={showFilters} onClose={() => setShowFilters(false)} side="left" title="Filters & Queries">
+          {filterContent}
+        </Drawer>
+
+        <Drawer open={showInspector} onClose={() => setShowInspector(false)} side="right" title="Card Inspector">
+          <CardDetail card={selected} onClose={() => setShowInspector(false)} />
+        </Drawer>
+      </div>
+    );
+  }
+
+  // ── DESKTOP LAYOUT ────────────────────────────────────────────────────
+  return (
+    <div style={{ display: "flex", height: "100vh", background: "#0f172a", color: "#e2e8f0", fontFamily: "Inter, system-ui, sans-serif" }}>
+
+      {/* ── Left sidebar: Query Builder ── */}
+      <div style={{ width: 280, borderRight: "1px solid #1e293b", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        {filterContent}
       </div>
 
       {/* ── Centre: Graph / Table + SPARQL Editor ── */}
@@ -709,7 +913,7 @@ export default function App() {
         {/* Main content */}
         <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
           {view === "graph" ? (
-            <GraphView cards={filtered} onSelectCard={setSelectedId} selectedId={selectedId} onOverflow={() => setView("table")} />
+            <GraphView cards={filtered} onSelectCard={handleSelectCard} selectedId={selectedId} onOverflow={() => setView("table")} />
           ) : (
             <div style={{ overflow: "auto", height: "100%", padding: "0 16px 16px" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
@@ -738,7 +942,7 @@ export default function App() {
                     const bannedBg = c.banned ? "#450a0a" : "transparent";
                     const rowBg = c.id === selectedId ? (c.banned ? "#5c1010" : "#1e293b") : bannedBg;
                     return (
-                    <tr key={c.id} onClick={() => setSelectedId(c.id)}
+                    <tr key={c.id} onClick={() => handleSelectCard(c.id)}
                       style={{
                         borderBottom: "1px solid #1e293b11", cursor: "pointer",
                         background: rowBg,
@@ -747,7 +951,7 @@ export default function App() {
                       onMouseLeave={e => { if (c.id !== selectedId) e.currentTarget.style.background = bannedBg; }}
                     >
                       <td style={{ padding: "6px", fontWeight: 500, color: "#f1f5f9" }}>
-                        <span style={{ color: DECK_COLOURS[c.deck] || "#94a3b8", marginRight: 4 }}>●</span>{c.name}
+                        <span style={{ color: DECK_COLOURS[c.deck] || "#94a3b8", marginRight: 4 }}>{"\u25CF"}</span>{c.name}
                       </td>
                       <td style={{ padding: "6px", color: "#94a3b8" }}>{c.deck}</td>
                       <td style={{ padding: "6px" }}>{TYPE_ICONS[c.type]} {c.type.replace(/([A-Z])/g, " $1").trim()}</td>
