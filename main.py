@@ -9,7 +9,7 @@ with open("tpl/tpl.ttl", "r") as file:
     tpl = file.read()
 
 m.add_template(tpl)
-m.map(de.ns + "Card", de.cards)
+m.map(de.ns + "Card", de.cards_for_rdf)
 m.map(de.ns + "CostPermutation", de.cost_permutations)
 m.map(de.ns + "CardGain", de.card_gains)
 m.map(de.ns + "CardAffect", de.card_affects)

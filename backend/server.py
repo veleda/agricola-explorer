@@ -33,7 +33,7 @@ def _build_model() -> Model:
     tpl_path = os.path.join(PROJECT_ROOT, "tpl", "tpl.ttl")
     with open(tpl_path, "r") as f:
         m.add_template(f.read())
-    m.map(de.ns + "Card", de.cards)
+    m.map(de.ns + "Card", de.cards_for_rdf)
     m.map(de.ns + "CostPermutation", de.cost_permutations)
     m.map(de.ns + "CardGain", de.card_gains)
     m.map(de.ns + "CardAffect", de.card_affects)
@@ -81,6 +81,7 @@ def _build_cards_json() -> list[dict]:
             "playRatio": round(r.get("play_ratio") or 0, 4),
             "cost": _strip(r.get("hasCost", "")) or None,
             "costLabel": r.get("cost_label") or None,
+            "imageUrl": r.get("image_url") or None,
             "gains": gains_map.get(subj, []),
             "affects": affects_map.get(subj, []),
             "relations": rels_map.get(subj, []),

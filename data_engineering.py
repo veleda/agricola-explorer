@@ -223,22 +223,88 @@ def _list_to_iris(items: list[str]) -> str:
 
 # ─── Main loader ─────────────────────────────────────────────────────────────
 
-def load_cards(csv_path: str = "data/agricola_cards_all.csv") -> pl.DataFrame:
-    """Load the Agricola cards CSV, build IRIs for subject, type, cost,
-    gains, affects, and relations."""
+def _load_tournament_stats(csv_path: str = "data/agricola_cards_all.csv") -> dict:
+    """Load tournament stats from the legacy CSV, keyed by normalised card name."""
+    import os
+    if not os.path.exists(csv_path):
+        return {}
+    stats_df = pl.read_csv(csv_path, infer_schema_length=10000)
+    stats_df = stats_df.rename({c: c.replace(" ", "_") for c in stats_df.columns if " " in c})
+    stats_cols = ["dealt", "drafted", "played", "won", "ADP",
+                  "play_ratio", "win_ratio", "PWR", "PWR_no_log", "banned", "is_no"]
+    lookup = {}
+    for row in stats_df.iter_rows(named=True):
+        name = (row.get("Name") or "").strip().lower()
+        if name:
+            lookup[name] = {col: row.get(col) for col in stats_cols}
+    return lookup
 
-    df = pl.read_csv(csv_path, infer_schema_length=10000)
 
-    # Sanitise column names
-    df = df.rename({c: c.replace(" ", "_") for c in df.columns if " " in c})
+def load_cards(json_path: str = "data/cards.json",
+               stats_csv: str = "data/agricola_cards_all.csv") -> pl.DataFrame:
+    """Load cards from cards.json (single source of truth), enrich with
+    tournament stats from the legacy CSV, and build IRIs."""
+    import json as _json
 
-    # ── Subject IRI ───────────────────────────────────────────────────────
-    df = df.with_row_index("row_idx").with_columns(
-        pl.when(pl.col("Card_ID").is_not_null() & (pl.col("Card_ID") != ""))
-        .then(pl.lit(ns) + pl.col("Card_ID"))
-        .otherwise(pl.lit(ns) + pl.lit("card_") + pl.col("row_idx").cast(pl.Utf8))
-        .alias("subject")
-    ).drop("row_idx")
+    with open(json_path, "r") as f:
+        raw_cards = _json.load(f)
+
+    # Load tournament stats for merge
+    stats = _load_tournament_stats(stats_csv)
+
+    # Build rows
+    rows = []
+    for c in raw_cards:
+        name = c.get("card_name", "")
+        name_lower = name.strip().lower()
+        st = stats.get(name_lower, {})
+
+        # Use first deck for primary deck column; keep all decks as comma-sep
+        decks = c.get("decks") or []
+        primary_deck = decks[0] if decks else ""
+        all_decks = ",".join(decks)
+
+        # Cost string: new JSON uses "1W,1C" with commas → replace with spaces
+        cost_raw = (c.get("cost") or "").replace(",", " ")
+
+        # Image: take first URL if available
+        imgs = c.get("card_image_urls") or []
+        image_url = imgs[0] if imgs else None
+
+        rows.append({
+            "Card_ID": c.get("card_uuid", ""),
+            "Name": name,
+            "Type": c.get("card_type", ""),
+            "Deck": primary_deck,
+            "Decks": all_decks,
+            "Players": str(c.get("min_no_players") or "") if c.get("min_no_players") else None,
+            "Cost": cost_raw or None,
+            "Prerequisite": c.get("requirement") or None,
+            "Card_Text": c.get("card_text") or None,
+            "Bonus_Points": str(c.get("victory_points")) if c.get("victory_points") else None,
+            "image_url": image_url,
+            "card_creator": c.get("card_creator") or None,
+            "is_passing_minor": c.get("is_passing_minor", False),
+            # Tournament stats (merged from CSV)
+            "dealt": st.get("dealt"),
+            "drafted": st.get("drafted"),
+            "played": st.get("played"),
+            "won": st.get("won"),
+            "ADP": st.get("ADP"),
+            "play_ratio": st.get("play_ratio"),
+            "win_ratio": st.get("win_ratio"),
+            "PWR": st.get("PWR"),
+            "PWR_no_log": st.get("PWR_no_log"),
+            "banned": st.get("banned"),
+            "is_no": st.get("is_no"),
+        })
+
+    df = pl.DataFrame(rows)
+
+    # ── Subject IRI (use UUID) ────────────────────────────────────────────
+    df = df.with_columns(
+        (pl.lit(ns) + pl.col("Card_ID")).alias("subject")
+    )
 
     # ── Type IRI (CamelCase) ──────────────────────────────────────────────
     df = df.with_columns(
@@ -247,40 +313,25 @@ def load_cards(csv_path: str = "data/agricola_cards_all.csv") -> pl.DataFrame:
 
     # ── Cost IRI ──────────────────────────────────────────────────────────
     cost_col = df["Cost"].to_list()
-    cost_iris = []
-    cost_labels = []
-    cost_clay = []
-    cost_stone = []
-    cost_reed = []
-    cost_wood = []
-    cost_food = []
-    cost_grain = []
-    cost_vegetable = []
-    cost_special = []
+    cost_iris, cost_labels = [], []
+    cost_clay, cost_stone, cost_reed, cost_wood = [], [], [], []
+    cost_food, cost_grain, cost_vegetable, cost_special = [], [], [], []
 
     for raw in cost_col:
         result = cost_to_iri(raw)
         if result is None:
-            cost_iris.append(None)
-            cost_labels.append(None)
-            cost_clay.append(None)
-            cost_stone.append(None)
-            cost_reed.append(None)
-            cost_wood.append(None)
-            cost_food.append(None)
-            cost_grain.append(None)
-            cost_vegetable.append(None)
-            cost_special.append(None)
+            cost_iris.append(None); cost_labels.append(None)
+            cost_clay.append(None); cost_stone.append(None)
+            cost_reed.append(None); cost_wood.append(None)
+            cost_food.append(None); cost_grain.append(None)
+            cost_vegetable.append(None); cost_special.append(None)
         else:
             cost_iris.append(result["iri"])
             cost_labels.append(result["label"])
             res = result["resources"]
-            cost_clay.append(res.get("clay"))
-            cost_stone.append(res.get("stone"))
-            cost_reed.append(res.get("reed"))
-            cost_wood.append(res.get("wood"))
-            cost_food.append(res.get("food"))
-            cost_grain.append(res.get("grain"))
+            cost_clay.append(res.get("clay")); cost_stone.append(res.get("stone"))
+            cost_reed.append(res.get("reed")); cost_wood.append(res.get("wood"))
+            cost_food.append(res.get("food")); cost_grain.append(res.get("grain"))
             cost_vegetable.append(res.get("vegetable"))
             cost_special.append(result["special_iri"])
 
@@ -358,9 +409,9 @@ cards = load_cards()
 cost_permutations = build_cost_permutations(cards)
 card_gains, card_affects, card_relations = build_card_annotations(cards)
 
-#print("Card columns:", cards.columns)
-#print(f"Cards: {cards.shape[0]}, Cost permutations: {cost_permutations.shape[0]}")
-#print(f"Gains: {card_gains.shape[0]}, Affects: {card_affects.shape[0]}, Relations: {card_relations.shape[0]}")
+# Columns the OTTR Card template does NOT know about – drop before maplib mapping
+_EXTRA_COLS = {"image_url", "card_creator", "is_passing_minor", "Decks"}
+cards_for_rdf = cards.drop([c for c in _EXTRA_COLS if c in cards.columns])
 #print()
 #print(card_gains.head(5))
 #print(card_affects.head(5))

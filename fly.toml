@@ -1,17 +1,22 @@
-# fly.toml – Fly.io deployment config for Agricola Explorer
-app = "agricola-explorer"
-primary_region = "ams"
+# fly.toml app configuration file generated for agricola-explorer on 2026-03-16T19:27:02+01:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'agricola-explorer'
+primary_region = 'ams'
 
 [build]
 
 [http_service]
   internal_port = 8000
   force_https = true
-  auto_stop_machines = "stop"
+  auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 0
 
 [[vm]]
-  memory = "512mb"
-  cpu_kind = "shared"
+  memory = '512mb'
+  cpu_kind = 'shared'
   cpus = 1
+  memory_mb = 512
