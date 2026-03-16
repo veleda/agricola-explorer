@@ -264,9 +264,18 @@ function CardDetail({ card }) {
         <span style={{ fontSize: 22 }}>{TYPE_ICONS[card.type]}</span>
         <div>
           <div style={{ fontSize: 16, fontWeight: 700, color: "#f1f5f9" }}>{card.name}</div>
-          <div style={{ fontSize: 11, color: "#94a3b8" }}>{card.id} \u00B7 {card.type.replace(/([A-Z])/g, " $1").trim()} \u00B7 Deck {card.deck}</div>
+          <div style={{ fontSize: 11, color: "#94a3b8" }}>{card.type.replace(/([A-Z])/g, " $1").trim()} \u00B7 Deck {card.deck}</div>
         </div>
       </div>
+
+      {card.imageUrl && (
+        <div style={{ marginBottom: 12, borderRadius: 8, overflow: "hidden", border: "1px solid #1e293b" }}>
+          <img src={card.imageUrl} alt={card.name}
+            style={{ width: "100%", display: "block", background: "#1e293b" }}
+            onError={e => { e.target.style.display = "none"; }}
+          />
+        </div>
+      )}
 
       {card.costLabel && (
         <div style={{ fontSize: 12, color: "#cbd5e1", marginBottom: 8 }}>
