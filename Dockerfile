@@ -16,12 +16,9 @@ RUN pip install --no-cache-dir -r backend/requirements.txt
 
 # Copy project files
 COPY data_engineering.py .
-COPY main.py .
 COPY ontology.ttl .
 COPY tpl/ tpl/
 COPY data/ data/
-COPY queries/ queries/
-COPY dictionary .
 COPY backend/ backend/
 
 # Copy built frontend from stage 1

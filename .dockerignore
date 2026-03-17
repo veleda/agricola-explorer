@@ -4,6 +4,5 @@ node_modules
 ui/dist
 ui/node_modules
 .git
-out.ttl
-fts
+.DS_Store
 f5-agricola-rulebook.pdf
