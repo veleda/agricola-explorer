@@ -345,6 +345,9 @@ export default function Drafter({ allCards }) {
   // Community tab
   const [showCommunity, setShowCommunity] = useState(false);
 
+  // Show hand during draft
+  const [showDraftHand, setShowDraftHand] = useState(false);
+
   // Available decks for the current draft type
   const availableDecks = useMemo(() => {
     const typeCards = allCards.filter(c =>
@@ -614,7 +617,20 @@ export default function Drafter({ allCards }) {
           <div style={{ fontSize: 12, color: "#64748b" }}>
             {currentPack.length} cards in pack · Pick {myPicks.length + 1} of {MAX_PICKS}
           </div>
-          <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
+            {/* Hand toggle button */}
+            {myPicks.length > 0 && (
+              <button onClick={() => setShowDraftHand(s => !s)}
+                style={{
+                  background: showDraftHand ? "#f59e0b22" : "#1e293b",
+                  border: "1px solid", borderColor: showDraftHand ? "#f59e0b" : "#334155",
+                  borderRadius: 8, color: showDraftHand ? "#f59e0b" : "#94a3b8",
+                  padding: "4px 10px", fontSize: 11, fontWeight: 600, cursor: "pointer",
+                  display: "flex", alignItems: "center", gap: 4,
+                }}>
+                {"\u270B"} {myPicks.length}
+              </button>
+            )}
             {myPicks.map((id, i) => {
               const c = allCards.find(x => x.id === id);
               return (
@@ -633,6 +649,55 @@ export default function Drafter({ allCards }) {
             ))}
           </div>
         </div>
+
+        {/* Picked hand panel (collapsible) */}
+        {showDraftHand && myPicks.length > 0 && (
+          <div style={{
+            borderBottom: "1px solid #1e293b", background: "#0a0f1a",
+            padding: "10px 16px", flexShrink: 0,
+          }}>
+            <div style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
+              My Picks ({myPicks.length}/{MAX_PICKS})
+            </div>
+            <div style={{
+              display: "flex", flexWrap: "wrap", gap: 6,
+            }}>
+              {myPicks.map((id, i) => {
+                const c = allCards.find(x => x.id === id);
+                if (!c) return null;
+                const src = cardImgSrc(c);
+                return (
+                  <div key={id} style={{
+                    borderRadius: 6, overflow: "hidden", border: "1px solid #334155",
+                    background: "#0f172a", width: 105, flexShrink: 0,
+                  }}>
+                    <div style={{ position: "relative", width: 105, height: 138, overflow: "hidden", background: "#1e293b" }}>
+                      {src ? (
+                        <img src={src} alt={c.name}
+                          style={{ width: 105, height: 138, objectFit: "cover", objectPosition: "top", display: "block" }}
+                        />
+                      ) : (
+                        <div style={{ padding: 6, fontSize: 9, color: "#94a3b8", textAlign: "center", lineHeight: 1.3 }}>
+                          <div style={{ fontWeight: 700, color: "#f1f5f9", marginBottom: 2 }}>{c.name}</div>
+                          {c.deck}
+                        </div>
+                      )}
+                      <div style={{
+                        position: "absolute", top: 2, left: 2, background: "#0f172aCC", borderRadius: 99,
+                        padding: "1px 5px", fontSize: 8, fontWeight: 700, color: "#f59e0b",
+                      }}>#{i + 1}</div>
+                    </div>
+                    <div style={{ padding: "4px 6px" }}>
+                      <div style={{ fontSize: 10, fontWeight: 600, color: "#f1f5f9", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {c.name}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Card grid */}
         <div style={{ flex: 1, overflow: "auto", padding: 16 }}>
