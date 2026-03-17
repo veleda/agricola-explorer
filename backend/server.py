@@ -98,6 +98,7 @@ def _build_cards_json() -> list[dict]:
             "text": r.get("Card_Text") or "",
             "prerequisite": r.get("Prerequisite") or None,
             "banned": bool(r.get("banned")),
+            "isNo": bool(r.get("is_no")),
         })
     return cards
 

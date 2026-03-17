@@ -691,11 +691,22 @@ export default function App() {
 
   // App mode: "explorer" | "drafter"
   const [appMode, setAppMode] = useState("explorer");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  // Auto-collapse sidebar when entering drafter, expand when returning to explorer
+  const setAppModeWithSidebar = useCallback((mode) => {
+    setAppMode(mode);
+    setSidebarCollapsed(mode === "drafter");
+  }, []);
 
   // Data from backend
   const [allCards, setAllCards] = useState([]);
   const [meta, setMeta] = useState({ gains: [], affects: [], decks: [], types: [], totalCards: 0 });
   const [loading, setLoading] = useState(true);
+
+  // Norway Deck toggle
+  const [norwayOnly, setNorwayOnly] = useState(false);
+  const activeCards = useMemo(() => norwayOnly ? allCards.filter(c => c.isNo) : allCards, [allCards, norwayOnly]);
 
   // Filters & UI state
   const [filters, setFilters] = useState({
@@ -796,7 +807,7 @@ export default function App() {
 
   // Apply filters to cards shown in graph/table (client-side filtering)
   const filtered = useMemo(() => {
-    let cards = allCards.filter(c => {
+    let cards = activeCards.filter(c => {
       if (filters.gains.length > 0 && !filters.gains.some(g => c.gains.includes(g))) return false;
       if (filters.affects.length > 0 && !filters.affects.some(a => c.affects.includes(a))) return false;
       if (filters.decks.length > 0 && !filters.decks.includes(c.deck)) return false;
@@ -807,7 +818,7 @@ export default function App() {
     });
     if (limit !== "all") cards = cards.slice(0, limit);
     return cards;
-  }, [allCards, filters, limit]);
+  }, [activeCards, filters, limit]);
 
   const toggleSort = useCallback((col) => {
     if (sortCol === col) {
@@ -856,7 +867,7 @@ export default function App() {
       {/* Header (desktop only — drawer has its own) */}
       {!isMobile && (
         <div style={{ padding: "16px 16px 8px", borderBottom: "1px solid #1e293b" }}>
-          <button onClick={() => setAppMode("explorer")}
+          <button onClick={() => setAppModeWithSidebar("explorer")}
             style={{
               display: "block", width: "100%", textAlign: "left", background: "none", border: "none",
               cursor: "pointer", padding: 0, marginBottom: 2,
@@ -869,7 +880,7 @@ export default function App() {
               <span style={{ color: appMode === "explorer" ? "#f59e0b" : "#64748b" }}>Agricola</span> Explorer
             </div>
           </button>
-          <button onClick={() => setAppMode("drafter")}
+          <button onClick={() => setAppModeWithSidebar("drafter")}
             style={{
               display: "block", width: "100%", textAlign: "left", background: "none", border: "none",
               cursor: "pointer", padding: 0,
@@ -883,10 +894,32 @@ export default function App() {
             </div>
           </button>
           <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>
-            {appMode === "explorer" ? `Knowledge Graph · ${allCards.length} cards` : "Draft cards against 3 NPCs"}
+            {appMode === "explorer" ? `Knowledge Graph · ${activeCards.length} cards` : "Draft cards against 3 NPCs"}
           </div>
         </div>
       )}
+
+      {/* Norway Deck toggle */}
+      <div style={{ padding: "12px 16px 4px" }}>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button onClick={() => setNorwayOnly(false)}
+            style={{
+              flex: 1, padding: "8px 12px", borderRadius: 8, border: "1px solid",
+              borderColor: !norwayOnly ? "#3b82f6" : "#334155",
+              background: !norwayOnly ? "#3b82f622" : "transparent",
+              color: !norwayOnly ? "#3b82f6" : "#94a3b8",
+              fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all 0.15s",
+            }}>All Cards</button>
+          <button onClick={() => setNorwayOnly(true)}
+            style={{
+              flex: 1, padding: "8px 12px", borderRadius: 8, border: "1px solid",
+              borderColor: norwayOnly ? "#ef4444" : "#334155",
+              background: norwayOnly ? "#ef444422" : "transparent",
+              color: norwayOnly ? "#ef4444" : "#94a3b8",
+              fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all 0.15s",
+            }}>{"\uD83C\uDDF3\uD83C\uDDF4"} Norway Deck</button>
+        </div>
+      </div>
 
       {/* Presets */}
       <div style={{ padding: "12px 16px 4px" }}>
@@ -954,7 +987,7 @@ export default function App() {
     // Drafter mode on mobile
     // Shared mobile mode toggle button — taps to swap between Explorer and Drafter
     const mobileModeSwitcher = (
-      <button onClick={() => setAppMode(appMode === "explorer" ? "drafter" : "explorer")}
+      <button onClick={() => setAppModeWithSidebar(appMode === "explorer" ? "drafter" : "explorer")}
         style={{
           background: "#1e293b", border: "1px solid #334155", borderRadius: 8,
           color: "#f59e0b", padding: "8px 12px", fontSize: 13, fontWeight: 700,
@@ -977,7 +1010,7 @@ export default function App() {
             {mobileModeSwitcher}
           </div>
           <div style={{ flex: 1, overflow: "hidden" }}>
-            <Drafter allCards={allCards} />
+            <Drafter allCards={activeCards} norwayOnly={norwayOnly} setNorwayOnly={setNorwayOnly} />
           </div>
         </div>
       );
@@ -1018,7 +1051,7 @@ export default function App() {
 
           {/* Card count */}
           <div style={{ fontSize: 11, color: "#64748b", marginLeft: "auto" }}>
-            <span style={{ color: "#3b82f6", fontWeight: 600 }}>{filtered.length}</span>/{allCards.length}
+            <span style={{ color: "#3b82f6", fontWeight: 600 }}>{filtered.length}</span>/{activeCards.length}
           </div>
 
           {/* Hand toggle */}
@@ -1140,14 +1173,39 @@ export default function App() {
     <div style={{ display: "flex", height: "100vh", background: "#0f172a", color: "#e2e8f0", fontFamily: "Inter, system-ui, sans-serif" }}>
 
       {/* ── Left sidebar: Query Builder ── */}
-      <div style={{ width: 280, borderRight: "1px solid #1e293b", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        {filterContent}
+      <div style={{
+        width: sidebarCollapsed ? 40 : 280, minWidth: sidebarCollapsed ? 40 : 280,
+        borderRight: "1px solid #1e293b", display: "flex", flexDirection: "column", overflow: "hidden",
+        transition: "width 0.2s, min-width 0.2s",
+      }}>
+        {sidebarCollapsed ? (
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", paddingTop: 12, gap: 8 }}>
+            <button onClick={() => setSidebarCollapsed(false)}
+              title="Expand sidebar"
+              style={{
+                background: "none", border: "none", color: "#64748b", fontSize: 16,
+                cursor: "pointer", padding: 4, lineHeight: 1,
+              }}>{"\u25B6"}</button>
+          </div>
+        ) : (
+          <>
+            {filterContent}
+            {appMode === "drafter" && (
+              <button onClick={() => setSidebarCollapsed(true)}
+                style={{
+                  background: "none", border: "none", borderTop: "1px solid #1e293b",
+                  color: "#64748b", fontSize: 11, padding: "8px 16px", cursor: "pointer",
+                  textAlign: "center",
+                }}>{"\u25C0"} Collapse</button>
+            )}
+          </>
+        )}
       </div>
 
       {/* ── Centre: Drafter OR Explorer ── */}
       {appMode === "drafter" ? (
         <div style={{ flex: 1, overflow: "hidden" }}>
-          <Drafter allCards={allCards} />
+          <Drafter allCards={activeCards} norwayOnly={norwayOnly} setNorwayOnly={setNorwayOnly} />
         </div>
       ) : (
       <>
@@ -1167,7 +1225,7 @@ export default function App() {
             ))}
           </div>
           <div style={{ fontSize: 12, color: "#64748b" }}>
-            Showing <span style={{ color: "#3b82f6", fontWeight: 600 }}>{filtered.length}</span> of {allCards.length} cards
+            Showing <span style={{ color: "#3b82f6", fontWeight: 600 }}>{filtered.length}</span> of {activeCards.length} cards
             {limit !== "all" && <span style={{ color: "#334155", marginLeft: 4 }}>(limit {limit})</span>}
           </div>
 
