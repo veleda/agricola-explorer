@@ -1,0 +1,26 @@
+[
+  {
+    "id": "0bf9fa9d67f0",
+    "username": "v",
+    "draftType": "MinorImprovement",
+    "picks": [
+      "37c3cb1a-1c07-4320-b117-929c1cd43a08",
+      "1e0942e5-7912-4ed2-a118-3a970996a7b5",
+      "7ed708bf-c008-4844-86da-accfe2cbedd7",
+      "99249b94-8fb1-4308-97f3-d7fce697bad4",
+      "2e5e1631-4bb7-4323-b62d-33d94a29148a",
+      "128f8356-c635-461e-bf44-e5d1ea4c1b3e",
+      "5dfec846-1e0b-4d9f-8ed4-7460804de4da"
+    ],
+    "pickOrder": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "timestamp": "2026-03-16T22:17:30.807430Z"
+  }
+]

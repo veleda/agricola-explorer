@@ -20,3 +20,10 @@ primary_region = 'ams'
   cpu_kind = 'shared'
   cpus = 1
   memory_mb = 512
+
+[mounts]
+  source = "agricola_data"
+  destination = "/data"
+
+[env]
+  DRAFTS_DB_PATH = "/data/drafts.db"

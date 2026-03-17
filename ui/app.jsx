@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import * as d3 from "d3";
+import Drafter from "./drafter.jsx";
 
 // ── API helpers ─────────────────────────────────────────────────────────────
 const API_BASE = "";  // same origin in production; Vite proxy in dev
@@ -688,6 +689,9 @@ function Drawer({ open, onClose, side, children, title }) {
 export default function App() {
   const isMobile = useIsMobile();
 
+  // App mode: "explorer" | "drafter"
+  const [appMode, setAppMode] = useState("explorer");
+
   // Data from backend
   const [allCards, setAllCards] = useState([]);
   const [meta, setMeta] = useState({ gains: [], affects: [], decks: [], types: [], totalCards: 0 });
@@ -852,11 +856,34 @@ export default function App() {
       {/* Header (desktop only — drawer has its own) */}
       {!isMobile && (
         <div style={{ padding: "16px 16px 8px", borderBottom: "1px solid #1e293b" }}>
-          <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: -0.5 }}>
-            <span style={{ color: "#f59e0b" }}>Agricola</span> Explorer
-          </div>
-          <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
-            Knowledge Graph · {allCards.length} cards
+          <button onClick={() => setAppMode("explorer")}
+            style={{
+              display: "block", width: "100%", textAlign: "left", background: "none", border: "none",
+              cursor: "pointer", padding: 0, marginBottom: 2,
+            }}>
+            <div style={{
+              fontSize: 18, fontWeight: 700, letterSpacing: -0.5,
+              color: appMode === "explorer" ? "#f1f5f9" : "#475569",
+              transition: "color 0.15s",
+            }}>
+              <span style={{ color: appMode === "explorer" ? "#f59e0b" : "#64748b" }}>Agricola</span> Explorer
+            </div>
+          </button>
+          <button onClick={() => setAppMode("drafter")}
+            style={{
+              display: "block", width: "100%", textAlign: "left", background: "none", border: "none",
+              cursor: "pointer", padding: 0,
+            }}>
+            <div style={{
+              fontSize: 18, fontWeight: 700, letterSpacing: -0.5,
+              color: appMode === "drafter" ? "#f1f5f9" : "#475569",
+              transition: "color 0.15s",
+            }}>
+              <span style={{ color: appMode === "drafter" ? "#f59e0b" : "#64748b" }}>Agricola</span> Drafter
+            </div>
+          </button>
+          <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>
+            {appMode === "explorer" ? `Knowledge Graph · ${allCards.length} cards` : "Draft cards against 3 NPCs"}
           </div>
         </div>
       )}
@@ -924,6 +951,38 @@ export default function App() {
 
   // ── MOBILE LAYOUT ─────────────────────────────────────────────────────
   if (isMobile) {
+    // Drafter mode on mobile
+    // Shared mobile mode toggle button — taps to swap between Explorer and Drafter
+    const mobileModeSwitcher = (
+      <button onClick={() => setAppMode(appMode === "explorer" ? "drafter" : "explorer")}
+        style={{
+          background: "#1e293b", border: "1px solid #334155", borderRadius: 8,
+          color: "#f59e0b", padding: "8px 12px", fontSize: 13, fontWeight: 700,
+          cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
+          whiteSpace: "nowrap",
+        }}>
+        <span style={{ fontSize: 11, color: "#64748b" }}>{appMode === "explorer" ? "Draft" : "Explore"} {"\u2192"}</span>
+        {appMode === "explorer" ? "Explorer" : "Drafter"}
+      </button>
+    );
+
+    if (appMode === "drafter") {
+      return (
+        <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: "#0f172a", color: "#e2e8f0", fontFamily: "Inter, system-ui, sans-serif" }}>
+          {/* Mobile drafter header */}
+          <div style={{
+            display: "flex", alignItems: "center", padding: "10px 12px",
+            borderBottom: "1px solid #1e293b", gap: 8, flexShrink: 0,
+          }}>
+            {mobileModeSwitcher}
+          </div>
+          <div style={{ flex: 1, overflow: "hidden" }}>
+            <Drafter allCards={allCards} />
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: "#0f172a", color: "#e2e8f0", fontFamily: "Inter, system-ui, sans-serif" }}>
 
@@ -932,6 +991,8 @@ export default function App() {
           display: "flex", alignItems: "center", padding: "10px 12px",
           borderBottom: "1px solid #1e293b", gap: 8, flexShrink: 0,
         }}>
+          {mobileModeSwitcher}
+
           {/* Hamburger / Filters */}
           <button onClick={() => setShowFilters(true)} style={{
             background: "#1e293b", border: "1px solid #334155", borderRadius: 8,
@@ -1083,7 +1144,13 @@ export default function App() {
         {filterContent}
       </div>
 
-      {/* ── Centre: Graph / Table + SPARQL Editor ── */}
+      {/* ── Centre: Drafter OR Explorer ── */}
+      {appMode === "drafter" ? (
+        <div style={{ flex: 1, overflow: "hidden" }}>
+          <Drafter allCards={allCards} />
+        </div>
+      ) : (
+      <>
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
 
         {/* Top bar */}
@@ -1254,6 +1321,8 @@ export default function App() {
           )}
         </div>
       </div>
+      </>
+      )}
     </div>
   );
 }

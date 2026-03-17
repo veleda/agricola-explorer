@@ -5,6 +5,9 @@ Endpoints:
   GET  /api/cards              → full card list as JSON (for graph / table)
   POST /api/sparql             → run arbitrary SPARQL, return {columns, rows}
   GET  /api/meta               → gain/affect/deck/type facets for filter chips
+  POST /api/drafts             → save a completed draft hand
+  GET  /api/drafts             → list all saved draft hands
+  GET  /api/drafts/stats       → community pick popularity stats
   GET  /                       → serve the built React frontend (index.html)
 """
 
@@ -12,7 +15,10 @@ import os
 import sys
 import time
 import json
+import sqlite3
 import hashlib
+import datetime
+from typing import Optional
 from urllib.parse import unquote
 
 import httpx
@@ -176,6 +182,129 @@ def _format_value(val) -> str:
     if s.startswith(NS):
         s = ":" + s[len(NS):]
     return s
+
+# ── Draft hands storage (SQLite — persists across deploys on Fly Volumes) ────
+#
+# Set DRAFTS_DB_PATH env var to point at a Fly Volume mount, e.g.:
+#   DRAFTS_DB_PATH=/data/drafts.db
+# Falls back to ./data/drafts.db for local development.
+
+DRAFTS_DB_PATH = os.environ.get(
+    "DRAFTS_DB_PATH",
+    os.path.join(PROJECT_ROOT, "data", "drafts.db"),
+)
+
+def _get_db() -> sqlite3.Connection:
+    """Return a connection to the drafts database, creating the table if needed."""
+    os.makedirs(os.path.dirname(DRAFTS_DB_PATH), exist_ok=True)
+    conn = sqlite3.connect(DRAFTS_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")  # better concurrent read/write
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS drafts (
+            id         TEXT PRIMARY KEY,
+            username   TEXT NOT NULL,
+            draftType  TEXT NOT NULL,
+            picks      TEXT NOT NULL,
+            pickOrder  TEXT NOT NULL,
+            timestamp  TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    return conn
+
+def _row_to_dict(row: sqlite3.Row) -> dict:
+    d = dict(row)
+    d["picks"] = json.loads(d["picks"])
+    d["pickOrder"] = json.loads(d["pickOrder"])
+    return d
+
+class DraftSaveRequest(BaseModel):
+    username: str
+    draftType: str             # "Occupation" or "MinorImprovement"
+    picks: list[str]           # card IDs in pick order
+    pickOrder: list[int]       # round number for each pick (1-7)
+
+@app.post("/api/drafts")
+def save_draft(req: DraftSaveRequest):
+    if not req.username.strip():
+        return JSONResponse(status_code=400, content={"error": "username required"})
+    if len(req.picks) != 7:
+        return JSONResponse(status_code=400, content={"error": "must have exactly 7 picks"})
+    if req.draftType not in ("Occupation", "MinorImprovement"):
+        return JSONResponse(status_code=400, content={"error": "invalid draftType"})
+
+    draft_id = hashlib.md5(f"{req.username}{time.time()}".encode()).hexdigest()[:12]
+    ts = datetime.datetime.utcnow().isoformat() + "Z"
+
+    conn = _get_db()
+    conn.execute(
+        "INSERT INTO drafts (id, username, draftType, picks, pickOrder, timestamp) VALUES (?,?,?,?,?,?)",
+        (draft_id, req.username.strip(), req.draftType,
+         json.dumps(req.picks), json.dumps(req.pickOrder), ts),
+    )
+    conn.commit()
+    conn.close()
+
+    entry = {
+        "id": draft_id, "username": req.username.strip(),
+        "draftType": req.draftType, "picks": req.picks,
+        "pickOrder": req.pickOrder, "timestamp": ts,
+    }
+    return {"ok": True, "draft": entry}
+
+@app.get("/api/drafts")
+def list_drafts(username: Optional[str] = None, draftType: Optional[str] = None):
+    conn = _get_db()
+    query = "SELECT * FROM drafts WHERE 1=1"
+    params: list = []
+    if username:
+        query += " AND username = ?"
+        params.append(username)
+    if draftType:
+        query += " AND draftType = ?"
+        params.append(draftType)
+    query += " ORDER BY timestamp DESC"
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    drafts = [_row_to_dict(r) for r in rows]
+    return {"drafts": drafts, "total": len(drafts)}
+
+@app.get("/api/drafts/stats")
+def draft_stats(draftType: Optional[str] = None):
+    """Community stats: most popular picks by round."""
+    conn = _get_db()
+    query = "SELECT picks, pickOrder FROM drafts"
+    params: list = []
+    if draftType:
+        query += " WHERE draftType = ?"
+        params.append(draftType)
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+
+    round_picks: dict[int, dict[str, int]] = {}
+    overall_picks: dict[str, int] = {}
+    for row in rows:
+        picks = json.loads(row["picks"])
+        pick_order = json.loads(row["pickOrder"])
+        for i, card_id in enumerate(picks):
+            rnd = pick_order[i] if i < len(pick_order) else i + 1
+            round_picks.setdefault(rnd, {})
+            round_picks[rnd][card_id] = round_picks[rnd].get(card_id, 0) + 1
+            overall_picks[card_id] = overall_picks.get(card_id, 0) + 1
+
+    round_top = {}
+    for rnd, pk in round_picks.items():
+        sorted_picks = sorted(pk.items(), key=lambda x: x[1], reverse=True)[:5]
+        round_top[str(rnd)] = [{"cardId": cid, "count": cnt} for cid, cnt in sorted_picks]
+
+    overall_top = sorted(overall_picks.items(), key=lambda x: x[1], reverse=True)[:10]
+
+    return {
+        "totalDrafts": len(rows),
+        "roundTop": round_top,
+        "overallTop": [{"cardId": cid, "count": cnt} for cid, cnt in overall_top],
+    }
 
 # ── Image proxy (avoids mixed-content blocking) ─────────────────────────────
 
