@@ -240,6 +240,22 @@ def _load_tournament_stats(csv_path: str = "data/agricola_cards_all.csv") -> dic
     return lookup
 
 
+def _load_alt_images(agricola_json: str = "data/agricola.json") -> dict[str, str]:
+    """Build a name→full_url map from agricola.json alt_image field."""
+    import json as _json
+    ALT_IMG_BASE = "https://hauk88.github.io/PlayAgricolaStatistics/img/"
+    try:
+        with open(agricola_json, "r") as f:
+            data = _json.load(f)
+        return {
+            entry["name"].strip().lower(): ALT_IMG_BASE + entry["alt_image"]
+            for entry in data
+            if entry.get("alt_image")
+        }
+    except FileNotFoundError:
+        return {}
+
+
 def load_cards(json_path: str = "data/cards.json",
                stats_csv: str = "data/agricola_cards_all.csv") -> pl.DataFrame:
     """Load cards from cards.json (single source of truth), enrich with
@@ -251,6 +267,9 @@ def load_cards(json_path: str = "data/cards.json",
 
     # Load tournament stats for merge
     stats = _load_tournament_stats(stats_csv)
+
+    # Load alt images from agricola.json (preferred over cards.json images)
+    alt_images = _load_alt_images()
 
     # Build rows
     rows = []
@@ -267,9 +286,14 @@ def load_cards(json_path: str = "data/cards.json",
         # Cost string: new JSON uses "1W,1C" with commas → replace with spaces
         cost_raw = (c.get("cost") or "").replace(",", " ")
 
-        # Image: take first URL if available
+        # Image: prefer alt_image from agricola.json, fall back to cards.json
+        name_key = name.strip().lower().replace(" ", "").replace("'", "").replace("-", "")
+        alt_url = alt_images.get(name_key)
+        if not alt_url:
+            # Also try the raw lowercase name with spaces removed
+            alt_url = alt_images.get(name.strip().lower())
         imgs = c.get("card_image_urls") or []
-        image_url = imgs[0] if imgs else None
+        image_url = alt_url or (imgs[0] if imgs else None)
 
         rows.append({
             "Card_ID": c.get("card_uuid", ""),

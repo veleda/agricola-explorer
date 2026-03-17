@@ -333,6 +333,7 @@ export default function Drafter({ allCards }) {
   const [phase, setPhase] = useState("setup");
   const [draftType, setDraftType] = useState("Occupation");
   const [username, setUsername] = useState("");
+  const [selectedDecks, setSelectedDecks] = useState(null); // null = not initialised yet
 
   // Draft state
   const [packs, setPacks] = useState([[], [], [], []]);  // 4 player packs
@@ -344,17 +345,49 @@ export default function Drafter({ allCards }) {
   // Community tab
   const [showCommunity, setShowCommunity] = useState(false);
 
-  // Cards available for drafting
-  const draftableCards = useMemo(() => {
-    return allCards.filter(c => {
-      if (draftType === "Occupation") return c.type === "Occupation";
-      return c.type === "MinorImprovement";
-    });
+  // Available decks for the current draft type
+  const availableDecks = useMemo(() => {
+    const typeCards = allCards.filter(c =>
+      draftType === "Occupation" ? c.type === "Occupation" : c.type === "MinorImprovement"
+    );
+    const deckSet = new Set(typeCards.map(c => c.deck).filter(Boolean));
+    return [...deckSet].sort();
   }, [allCards, draftType]);
+
+  // Initialise selectedDecks to all decks when availableDecks changes
+  useEffect(() => {
+    setSelectedDecks(availableDecks.length > 0 ? [...availableDecks] : []);
+  }, [availableDecks]);
+
+  const toggleDeck = useCallback((deck) => {
+    setSelectedDecks(prev => {
+      if (!prev) return [deck];
+      if (prev.includes(deck)) {
+        // Don't allow deselecting the last deck
+        if (prev.length <= 1) return prev;
+        return prev.filter(d => d !== deck);
+      }
+      return [...prev, deck];
+    });
+  }, []);
+
+  const selectAllDecks = useCallback(() => setSelectedDecks([...availableDecks]), [availableDecks]);
+  const selectNoDecksExcept = useCallback((deck) => setSelectedDecks([deck]), []);
+
+  // Cards available for drafting (filtered by type + selected decks)
+  const draftableCards = useMemo(() => {
+    const decks = selectedDecks || availableDecks;
+    return allCards.filter(c => {
+      if (draftType === "Occupation" ? c.type !== "Occupation" : c.type !== "MinorImprovement") return false;
+      return decks.includes(c.deck);
+    });
+  }, [allCards, draftType, selectedDecks, availableDecks]);
+
+  const canStart = username.trim() && (selectedDecks || []).length > 0 && draftableCards.length >= PACK_SIZE * NUM_PLAYERS;
 
   // Start a new draft
   const startDraft = useCallback(() => {
-    if (!username.trim()) return;
+    if (!canStart) return;
 
     // Shuffle and deal 4 packs of PACK_SIZE
     const pool = [...draftableCards];
@@ -374,7 +407,7 @@ export default function Drafter({ allCards }) {
     setRound(1);
     setSaved(false);
     setPhase("drafting");
-  }, [username, draftableCards]);
+  }, [canStart, draftableCards]);
 
   // Player picks a card from their current pack
   const handlePick = useCallback((card) => {
@@ -485,20 +518,58 @@ export default function Drafter({ allCards }) {
                     }}>{label}</button>
                 ))}
               </div>
+            </div>
+
+            {/* Deck selection */}
+            <div style={{ marginBottom: 24 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                <label style={{ fontSize: 11, color: "#64748b", textTransform: "uppercase", letterSpacing: 1 }}>
+                  Decks
+                </label>
+                <button onClick={selectAllDecks}
+                  style={{
+                    background: "none", border: "none", color: "#3b82f6", fontSize: 10,
+                    cursor: "pointer", textDecoration: "underline",
+                  }}>Select all</button>
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                {availableDecks.map(deck => {
+                  const active = (selectedDecks || []).includes(deck);
+                  return (
+                    <button key={deck}
+                      onClick={() => toggleDeck(deck)}
+                      onDoubleClick={() => selectNoDecksExcept(deck)}
+                      title={active ? "Click to remove · Double-click to select only this deck" : "Click to add"}
+                      style={{
+                        padding: "4px 10px", borderRadius: 99, border: "1px solid",
+                        borderColor: active ? "#8b5cf6" : "#334155",
+                        background: active ? "#8b5cf622" : "transparent",
+                        color: active ? "#8b5cf6" : "#64748b",
+                        fontSize: 11, cursor: "pointer", transition: "all 0.15s",
+                        fontWeight: active ? 600 : 400,
+                      }}>{deck}</button>
+                  );
+                })}
+              </div>
               <div style={{ fontSize: 11, color: "#475569", marginTop: 6 }}>
                 {draftableCards.length} cards in pool
+                {draftableCards.length < PACK_SIZE * NUM_PLAYERS && draftableCards.length > 0 && (
+                  <span style={{ color: "#f59e0b", marginLeft: 6 }}>
+                    (need at least {PACK_SIZE * NUM_PLAYERS} cards — select more decks)
+                  </span>
+                )}
               </div>
             </div>
 
             {/* Start */}
             <button onClick={startDraft}
-              disabled={!username.trim()}
+              disabled={!canStart}
               style={{
                 width: "100%", padding: "14px 24px", borderRadius: 10, border: "none",
-                background: username.trim() ? "linear-gradient(135deg, #f59e0b, #d97706)" : "#334155",
-                color: username.trim() ? "#0f172a" : "#64748b",
-                fontSize: 16, fontWeight: 700, cursor: username.trim() ? "pointer" : "default",
-                boxShadow: username.trim() ? "0 4px 20px #f59e0b33" : "none",
+                background: canStart ? "linear-gradient(135deg, #f59e0b, #d97706)" : "#334155",
+                color: canStart ? "#0f172a" : "#64748b",
+                fontSize: 16, fontWeight: 700, cursor: canStart ? "pointer" : "default",
+                boxShadow: canStart ? "0 4px 20px #f59e0b33" : "none",
                 transition: "all 0.2s",
               }}>
               Start Draft

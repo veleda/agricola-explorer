@@ -308,7 +308,7 @@ def draft_stats(draftType: Optional[str] = None):
 
 # ── Image proxy (avoids mixed-content blocking) ─────────────────────────────
 
-ALLOWED_IMAGE_HOSTS = {"play-agricola.com", "www.play-agricola.com"}
+ALLOWED_IMAGE_HOSTS = {"play-agricola.com", "www.play-agricola.com", "hauk88.github.io"}
 _http_client: httpx.AsyncClient | None = None
 
 async def _get_http_client() -> httpx.AsyncClient:
