@@ -222,18 +222,22 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
 
 class DraftSaveRequest(BaseModel):
     username: str
-    draftType: str             # "Occupation" or "MinorImprovement"
+    draftType: str             # "Occupation", "MinorImprovement", "MiniOccupation", "MiniMinorImprovement"
     picks: list[str]           # card IDs in pick order
-    pickOrder: list[int]       # round number for each pick (1-7)
+    pickOrder: list[int]       # round number for each pick
+
+_VALID_DRAFT_TYPES = {"Occupation", "MinorImprovement", "MiniOccupation", "MiniMinorImprovement"}
+_PICK_COUNTS = {"Occupation": 7, "MinorImprovement": 7, "MiniOccupation": 5, "MiniMinorImprovement": 5}
 
 @app.post("/api/drafts")
 def save_draft(req: DraftSaveRequest):
     if not req.username.strip():
         return JSONResponse(status_code=400, content={"error": "username required"})
-    if len(req.picks) != 7:
-        return JSONResponse(status_code=400, content={"error": "must have exactly 7 picks"})
-    if req.draftType not in ("Occupation", "MinorImprovement"):
+    expected_picks = _PICK_COUNTS.get(req.draftType)
+    if expected_picks is None:
         return JSONResponse(status_code=400, content={"error": "invalid draftType"})
+    if len(req.picks) != expected_picks:
+        return JSONResponse(status_code=400, content={"error": f"must have exactly {expected_picks} picks for {req.draftType}"})
 
     draft_id = hashlib.md5(f"{req.username}{time.time()}".encode()).hexdigest()[:12]
     ts = datetime.datetime.utcnow().isoformat() + "Z"
