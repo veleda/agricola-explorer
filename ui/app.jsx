@@ -118,11 +118,21 @@ function GraphView({ cards, onSelectCard, selectedId, onOverflow }) {
     });
 
     const links = [];
+    const cardById = new Map(cards.map(c => [c.id, c]));
     cards.forEach(c => {
       c.gains.forEach(g => links.push({ source: c.id, target: g, type: "gains" }));
       c.relations.forEach(r => {
         const target = cards.find(x => x.name.replace(/\s/g, "") === r || x.id === r);
         if (target) links.push({ source: c.id, target: target.id, type: "relatedTo" });
+      });
+      // Combo edges ("works well with")
+      (c.combos || []).forEach(combo => {
+        if (cardById.has(combo.id) && nodeMap.has(combo.id)) {
+          // Only add link once (from the card with the smaller id)
+          if (c.id < combo.id) {
+            links.push({ source: c.id, target: combo.id, type: "combo", reason: combo.reason });
+          }
+        }
       });
     });
 
@@ -146,10 +156,10 @@ function GraphView({ cards, onSelectCard, selectedId, onOverflow }) {
     svg.call(d3.zoom().scaleExtent([0.1, 6]).on("zoom", (e) => g.attr("transform", e.transform)));
 
     const link = g.append("g").selectAll("line").data(links).join("line")
-      .attr("stroke", d => d.type === "relatedTo" ? "#f59e0b" : "#cbd5e1")
-      .attr("stroke-width", d => d.type === "relatedTo" ? 2 : 1)
-      .attr("stroke-dasharray", d => d.type === "relatedTo" ? "6,3" : "none")
-      .attr("opacity", 0.5);
+      .attr("stroke", d => d.type === "combo" ? "#10b981" : d.type === "relatedTo" ? "#f59e0b" : "#cbd5e1")
+      .attr("stroke-width", d => d.type === "combo" ? 1.5 : d.type === "relatedTo" ? 2 : 1)
+      .attr("stroke-dasharray", d => d.type === "combo" ? "4,4" : d.type === "relatedTo" ? "6,3" : "none")
+      .attr("opacity", d => d.type === "combo" ? 0.6 : 0.5);
 
     const node = g.append("g").selectAll("g").data(nodes).join("g")
       .attr("cursor", "pointer")
@@ -395,13 +405,26 @@ function CardDetail({ card, onClose, onFilterGain, onFilterAffect, onFilterPrere
       )}
 
       {card.relations.length > 0 && (
-        <div>
+        <div style={{ marginBottom: 8 }}>
           <div style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>Related Cards</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
             {card.relations.map(r => (
               <ClickableChip key={r} label={r.replace(/([A-Z])/g, " $1").trim()}
                 color="#ec4899" bgColor="#ec489922" borderColor="#ec489944"
                 onClick={() => onSelectCardByName && onSelectCardByName(r)} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {card.combos && card.combos.length > 0 && (
+        <div>
+          <div style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>Works Well With</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+            {card.combos.map(combo => (
+              <ClickableChip key={combo.id} label={combo.name || combo.id}
+                color="#10b981" bgColor="#10b98122" borderColor="#10b98144"
+                onClick={() => onSelectCardByName && onSelectCardByName(combo.id)} />
             ))}
           </div>
         </div>
@@ -608,10 +631,13 @@ export default function App() {
     setFilters(f => ({ ...f, prerequisite: prereq }));
   }, []);
 
-  const handleSelectCardByName = useCallback((camelName) => {
-    // Relation names are CamelCase like "ClayOven", find matching card
-    const normalized = camelName.replace(/([A-Z])/g, " $1").trim().toLowerCase();
-    const card = allCards.find(c => c.name.toLowerCase() === normalized);
+  const handleSelectCardByName = useCallback((nameOrId) => {
+    // Try matching by ID first (for combo clicks), then by CamelCase name (for relation clicks)
+    let card = allCards.find(c => c.id === nameOrId);
+    if (!card) {
+      const normalized = nameOrId.replace(/([A-Z])/g, " $1").trim().toLowerCase();
+      card = allCards.find(c => c.name.toLowerCase() === normalized);
+    }
     if (card) {
       setSelectedId(card.id);
       if (isMobile) setShowInspector(true);

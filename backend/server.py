@@ -78,6 +78,40 @@ def _build_cards_json() -> list[dict]:
     for row in de.card_relations.iter_rows(named=True):
         rels_map.setdefault(row["subject"], []).append(_strip(row["relation"]))
 
+    # Build combos map: subject → [{id, name, reason}]
+    COMBO_REASON_PRIORITY = {
+        "card_reference": 0, "multi_signal": 1, "vegetable_supply": 2,
+        "grain_supply": 3, "animal_breeding": 4, "baking_strategy": 5,
+        "family_room": 6,
+    }
+    COMBO_REASON_LABELS = {
+        "card_reference": "Referenced in card text",
+        "multi_signal": "Multiple shared mechanics",
+        "vegetable_supply": "Vegetable supply chain",
+        "grain_supply": "Grain supply chain",
+        "animal_breeding": "Animal + breeding synergy",
+        "baking_strategy": "Baking strategy",
+        "family_room": "Family growth + room",
+    }
+    MAX_COMBOS_PER_CARD = 15
+    # Name lookup for combo partners
+    subj_to_name: dict[str, str] = {}
+    for row in de.cards.iter_rows(named=True):
+        subj_to_name[row["subject"]] = row["Name"]
+    combos_raw: dict[str, list[tuple[str, str]]] = {}
+    for row in de.card_combos.iter_rows(named=True):
+        a, b, reason = row["subject_a"], row["subject_b"], row["combo_reason"]
+        combos_raw.setdefault(a, []).append((b, reason))
+        combos_raw.setdefault(b, []).append((a, reason))
+    combos_map: dict[str, list[dict]] = {}
+    for subj, partners in combos_raw.items():
+        partners.sort(key=lambda p: COMBO_REASON_PRIORITY.get(p[1], 99))
+        combos_map[subj] = [
+            {"id": p.replace(NS, ""), "name": subj_to_name.get(p, ""), "reason": r,
+             "reasonLabel": COMBO_REASON_LABELS.get(r, r)}
+            for p, r in partners[:MAX_COMBOS_PER_CARD]
+        ]
+
     cards = []
     for r in de.cards.iter_rows(named=True):
         subj = r.get("subject", "")
@@ -103,6 +137,7 @@ def _build_cards_json() -> list[dict]:
             "pwrCorrected": round(r.get("PWRcorr") or 0, 2),
             "deck2": r.get("Deck2"),
             "hasBonusSymbol": bool(r.get("has_bonus_symbol")),
+            "combos": combos_map.get(subj, []),
         })
     return cards
 

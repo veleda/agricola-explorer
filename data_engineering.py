@@ -442,6 +442,121 @@ def build_card_annotations(cards_df: pl.DataFrame) -> tuple[pl.DataFrame, pl.Dat
     return gains_df, affects_df, relations_df
 
 
+# ─── "Works Well With" combo inference ──────────────────────────────────────
+
+def build_card_combos(
+    cards_df: pl.DataFrame,
+    gains_df: pl.DataFrame,
+    affects_df: pl.DataFrame,
+    relations_df: pl.DataFrame,
+) -> pl.DataFrame:
+    """Infer card synergy combos from structured card data.
+
+    Produces (subject_a, subject_b, reason) rows.  Equivalent to the datalog
+    rules we'd write for maplib once its parser is implemented:
+
+      [?a, :worksWellWith, ?b] :- ...
+
+    Combo rules implemented:
+      1. Bidirectional card-text references
+      2. Rare-resource supply chain (grain, vegetable cost)
+      3. Animal husbandry (animal gain + breeding affect)
+      4. Animal infrastructure (pasture/fence + animal gain)
+      5. Grain-bake strategy (grain gain + bake gain with sow/harvest affect)
+      6. Grain-sow field synergy (grain gain + field gain with sow affect)
+      7. Family growth + room building
+    """
+    # ── Look-up sets ──────────────────────────────────────────────────────
+    def _subjects_with_gain(g: str) -> set[str]:
+        return set(gains_df.filter(pl.col("gain") == ns + g)["subject"].to_list())
+
+    def _subjects_with_affect(a: str) -> set[str]:
+        return set(affects_df.filter(pl.col("affect") == ns + a)["subject"].to_list())
+
+    # Cards that cost a specific resource (> 0)
+    def _subjects_costing(resource_col: str) -> set[str]:
+        return set(
+            cards_df.filter(pl.col(resource_col).is_not_null() & (pl.col(resource_col) > 0))
+            ["subject"].to_list()
+        )
+
+    combos: set[tuple[str, str, str]] = set()
+
+    def _add(a_set: set, b_set: set, reason: str):
+        for a in a_set:
+            for b in b_set:
+                if a != b:
+                    pair = tuple(sorted([a, b]))
+                    combos.add((pair[0], pair[1], reason))
+
+    # ── Rule 1: Bidirectional card-text references ────────────────────────
+    # Resolve relation targets (name-based IRIs) to card subjects
+    name_to_subject: dict[str, str] = {}
+    for row in cards_df.iter_rows(named=True):
+        norm = re.sub(r'[^a-zA-Z0-9]', '', row["Name"].strip())
+        name_to_subject[norm] = row["subject"]
+
+    for row in relations_df.iter_rows(named=True):
+        src = row["subject"]
+        target_local = row["relation"].replace(ns, "")
+        target_subj = name_to_subject.get(target_local)
+        if target_subj and src != target_subj:
+            pair = tuple(sorted([src, target_subj]))
+            combos.add((pair[0], pair[1], "card_reference"))
+
+    # ── Rule 2: Rare-resource supply chain ────────────────────────────────
+    # Grain producers → grain consumers (only 13 cards cost grain)
+    _add(_subjects_with_gain("grain"), _subjects_costing("cost_grain"), "grain_supply")
+    # Vegetable producers → vegetable consumers (only 4 cost vegetable)
+    _add(_subjects_with_gain("vegetable"), _subjects_costing("cost_vegetable"), "vegetable_supply")
+
+    # ── Rule 3: Animal + breeding (tight: animal card must ALSO gain pasture/fence/stable) ─
+    breeders = _subjects_with_affect("breeding")
+    animal_infra = _subjects_with_gain("pasture") | _subjects_with_gain("fence") | _subjects_with_gain("stable")
+    for animal in ("sheep", "boar", "cattle"):
+        # Tight combo: animal provider also builds infrastructure
+        animal_infra_cards = _subjects_with_gain(animal) & animal_infra
+        _add(animal_infra_cards, breeders, "animal_breeding")
+        # Also: breeding cards that themselves gain animals
+        breeder_animals = breeders & _subjects_with_gain(animal)
+        animal_only = _subjects_with_gain(animal) - breeders
+        _add(animal_only, breeder_animals, "animal_breeding")
+
+    # ── Rule 4: Grain + bake (bake card must also affect sow or harvest) ──
+    bakers = _subjects_with_gain("bake")
+    sow_or_harvest = _subjects_with_affect("sow") | _subjects_with_affect("harvest")
+    strategic_bakers = bakers & sow_or_harvest
+    _add(_subjects_with_gain("grain"), strategic_bakers, "baking_strategy")
+
+    # ── Rule 5: Family growth + room (tight: room card must also affect immediately) ─
+    room_cards = _subjects_with_gain("room") & _subjects_with_affect("immediately")
+    _add(_subjects_with_gain("family_growth"), room_cards, "family_room")
+
+    # ── Rule 6: Multi-signal overlap ──────────────────────────────────────
+    # Cards that share 2+ uncommon gain categories → strong synergy
+    uncommon_gains = {"renovation", "cooking_hearth", "fireplace", "cooking",
+                      "pasture", "fence", "stable", "begging"}
+    subj_uncommon: dict[str, set[str]] = {}
+    for row in gains_df.iter_rows(named=True):
+        g = row["gain"].replace(ns, "")
+        if g in uncommon_gains:
+            subj_uncommon.setdefault(row["subject"], set()).add(g)
+    # Find pairs sharing 2+ uncommon gains
+    subjects_with_multi = [s for s, gs in subj_uncommon.items() if len(gs) >= 2]
+    for i, a in enumerate(subjects_with_multi):
+        for b in subjects_with_multi[i+1:]:
+            shared = subj_uncommon[a] & subj_uncommon[b]
+            if len(shared) >= 2:
+                pair = tuple(sorted([a, b]))
+                combos.add((pair[0], pair[1], "multi_signal"))
+
+    # Build DataFrame
+    rows = [{"subject_a": a, "subject_b": b, "combo_reason": r} for a, b, r in combos]
+    if not rows:
+        return pl.DataFrame(schema={"subject_a": pl.Utf8, "subject_b": pl.Utf8, "combo_reason": pl.Utf8})
+    return pl.DataFrame(rows)
+
+
 # ─── Cost permutation DataFrame (for the CostPermutation RDF instances) ──────
 
 def build_cost_permutations(cards_df: pl.DataFrame) -> pl.DataFrame:
@@ -473,12 +588,9 @@ def build_cost_permutations(cards_df: pl.DataFrame) -> pl.DataFrame:
 cards = load_cards()
 cost_permutations = build_cost_permutations(cards)
 card_gains, card_affects, card_relations = build_card_annotations(cards)
+card_combos = build_card_combos(cards, card_gains, card_affects, card_relations)
 
 # Columns the OTTR Card template does NOT know about – drop before maplib mapping
 _EXTRA_COLS = {"image_url", "card_creator", "is_passing_minor", "Decks",
                "PWRcorr", "Deck2", "has_bonus_symbol"}
 cards_for_rdf = cards.drop([c for c in _EXTRA_COLS if c in cards.columns])
-#print()
-#print(card_gains.head(5))
-#print(card_affects.head(5))
-#print(card_relations.head(5))
