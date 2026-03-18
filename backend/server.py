@@ -97,8 +97,12 @@ def _build_cards_json() -> list[dict]:
             "relations": rels_map.get(subj, []),
             "text": r.get("Card_Text") or "",
             "prerequisite": r.get("Prerequisite") or None,
+            "adp": round(r.get("ADP") or 0, 2),
             "banned": bool(r.get("banned")),
             "isNo": bool(r.get("is_no")),
+            "pwrCorrected": round(r.get("PWRcorr") or 0, 2),
+            "deck2": r.get("Deck2"),
+            "hasBonusSymbol": bool(r.get("has_bonus_symbol")),
         })
     return cards
 

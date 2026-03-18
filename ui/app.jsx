@@ -978,7 +978,7 @@ export default function App() {
                   <tr style={{ borderBottom: "1px solid #1e293b", color: "#64748b", textAlign: "left" }}>
                     <th style={{ padding: "6px 4px", position: "sticky", top: 0, background: "#0f172a", zIndex: 1 }}>Card</th>
                     <th style={{ padding: "6px 4px", position: "sticky", top: 0, background: "#0f172a", zIndex: 1 }}>Dk</th>
-                    {[["winRatio", "Win"], ["playRatio", "Play"], ["pwr", "PWR"]].map(([key, label]) => (
+                    {[["winRatio", "Win"], ["playRatio", "Play"], ["pwr", "PWR"], ["adp", "ADP"]].map(([key, label]) => (
                       <th key={key} onClick={() => toggleSort(key)}
                         style={{
                           padding: "6px 4px", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap",
@@ -1011,6 +1011,9 @@ export default function App() {
                       </td>
                       <td style={{ padding: "5px 4px", fontVariantNumeric: "tabular-nums", color: c.pwr > 2 ? "#a855f7" : "#94a3b8" }}>
                         {c.pwr > 0 ? c.pwr.toFixed(1) : "–"}
+                      </td>
+                      <td style={{ padding: "5px 4px", fontVariantNumeric: "tabular-nums", color: c.adp > 0 ? "#f59e0b" : "#94a3b8" }}>
+                        {c.adp > 0 ? c.adp.toFixed(1) : "–"}
                       </td>
                     </tr>
                   );})}
@@ -1138,7 +1141,7 @@ export default function App() {
                     <th style={{ padding: "8px 6px" }}>Card</th>
                     <th style={{ padding: "8px 6px" }}>Deck</th>
                     <th style={{ padding: "8px 6px" }}>Type</th>
-                    {[["winRatio", "Win %"], ["playRatio", "Play %"], ["pwr", "PWR"]].map(([key, label]) => (
+                    {[["winRatio", "Win %"], ["playRatio", "Play %"], ["pwr", "PWR"], ["adp", "ADP"]].map(([key, label]) => (
                       <th key={key} onClick={() => toggleSort(key)}
                         style={{ padding: "8px 6px", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}
                         onMouseEnter={e => e.currentTarget.style.color = "#e2e8f0"}
@@ -1179,6 +1182,9 @@ export default function App() {
                       </td>
                       <td style={{ padding: "6px", fontVariantNumeric: "tabular-nums", color: c.pwr > 2 ? "#a855f7" : "#94a3b8" }}>
                         {c.pwr > 0 ? c.pwr.toFixed(2) : "–"}
+                      </td>
+                      <td style={{ padding: "6px", fontVariantNumeric: "tabular-nums", color: c.adp > 0 ? "#f59e0b" : "#94a3b8" }}>
+                        {c.adp > 0 ? c.adp.toFixed(2) : "–"}
                       </td>
                       <td style={{ padding: "6px" }}>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 2 }}>

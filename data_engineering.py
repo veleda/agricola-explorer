@@ -240,6 +240,39 @@ def _load_tournament_stats(csv_path: str = "data/agricola_cards_all.csv") -> dic
     return lookup
 
 
+def _load_database_xlsx(xlsx_path: str = "data/AgricolaCards_Database_260224.xlsx") -> dict:
+    """Load the curated card database XLSX, keyed by card_uuid.
+
+    Returns new fields: PWRcorr, Deck2, has_bonus_symbol.
+    """
+    import os
+    if not os.path.exists(xlsx_path):
+        return {}
+    import openpyxl
+    wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
+    ws = wb["cards"]
+    rows = list(ws.iter_rows(values_only=True))
+    headers = [h for h in rows[0] if h is not None]
+    lookup = {}
+    for r in rows[1:]:
+        d = {headers[i]: r[i] for i in range(len(headers))}
+        uuid = d.get("card_uuid")
+        if not uuid:
+            continue
+        # Normalise #N/A values
+        def _clean(v):
+            if v == "#N/A" or v == "N/A":
+                return None
+            return v
+        lookup[uuid] = {
+            "PWRcorr": _clean(d.get("PWRcorr")),
+            "Deck2": d.get("Deck2"),
+            "has_bonus_symbol": bool(d.get("has_bonus_symbol")),
+        }
+    wb.close()
+    return lookup
+
+
 def _load_alt_images(agricola_json: str = "data/agricola.json") -> dict[str, str]:
     """Build a name→full_url map from agricola.json alt_image field."""
     import json as _json
@@ -259,7 +292,7 @@ def _load_alt_images(agricola_json: str = "data/agricola.json") -> dict[str, str
 def load_cards(json_path: str = "data/cards.json",
                stats_csv: str = "data/agricola_cards_all.csv") -> pl.DataFrame:
     """Load cards from cards.json (single source of truth), enrich with
-    tournament stats from the legacy CSV, and build IRIs."""
+    tournament stats from the legacy CSV, merge curated XLSX data, and build IRIs."""
     import json as _json
 
     with open(json_path, "r") as f:
@@ -267,6 +300,9 @@ def load_cards(json_path: str = "data/cards.json",
 
     # Load tournament stats for merge
     stats = _load_tournament_stats(stats_csv)
+
+    # Load curated database XLSX (PWRcorr, Deck2, has_bonus_symbol)
+    db_xlsx = _load_database_xlsx()
 
     # Load alt images from agricola.json (preferred over cards.json images)
     alt_images = _load_alt_images()
@@ -277,6 +313,7 @@ def load_cards(json_path: str = "data/cards.json",
         name = c.get("card_name", "")
         name_lower = name.strip().lower()
         st = stats.get(name_lower, {})
+        xlsx = db_xlsx.get(c.get("card_uuid", ""), {})
 
         # Use first deck for primary deck column; keep all decks as comma-sep
         decks = c.get("decks") or []
@@ -321,6 +358,10 @@ def load_cards(json_path: str = "data/cards.json",
             "PWR_no_log": st.get("PWR_no_log"),
             "banned": st.get("banned"),
             "is_no": st.get("is_no"),
+            # Curated database XLSX fields (merged on card_uuid)
+            "PWRcorr": xlsx.get("PWRcorr"),
+            "Deck2": xlsx.get("Deck2"),
+            "has_bonus_symbol": xlsx.get("has_bonus_symbol", False),
         })
 
     df = pl.DataFrame(rows)
@@ -434,7 +475,8 @@ cost_permutations = build_cost_permutations(cards)
 card_gains, card_affects, card_relations = build_card_annotations(cards)
 
 # Columns the OTTR Card template does NOT know about – drop before maplib mapping
-_EXTRA_COLS = {"image_url", "card_creator", "is_passing_minor", "Decks"}
+_EXTRA_COLS = {"image_url", "card_creator", "is_passing_minor", "Decks",
+               "PWRcorr", "Deck2", "has_bonus_symbol"}
 cards_for_rdf = cards.drop([c for c in _EXTRA_COLS if c in cards.columns])
 #print()
 #print(card_gains.head(5))
