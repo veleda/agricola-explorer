@@ -66,11 +66,11 @@ function npcPickMini(cards) {
 }
 
 // ── API helpers ─────────────────────────────────────────────────────────────
-async function saveDraft(username, draftType, picks, pickOrder) {
+async function saveDraft(username, draftType, picks, pickOrder, comment) {
   const res = await fetch(`${API_BASE}/api/drafts`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, draftType, picks, pickOrder }),
+    body: JSON.stringify({ username, draftType, picks, pickOrder, comment: comment || "" }),
   });
   return res.json();
 }
@@ -198,7 +198,7 @@ function DraftCard({ card, onPick, disabled, hideStats, pickPopularity }) {
 }
 
 // ── Draft results screen ────────────────────────────────────────────────────
-function DraftResults({ picks, allCards, draftType, saveDraftType, username, onSave, onNewDraft, saved, isMini }) {
+function DraftResults({ picks, allCards, draftType, saveDraftType, username, onSave, onNewDraft, saved, saving, isMini, saveResult, onViewHands }) {
   const pickCards = picks.map(id => allCards.find(c => c.id === id)).filter(Boolean);
   const avgWin = pickCards.length > 0 ? pickCards.reduce((s, c) => s + (c.winRatio || 0), 0) / pickCards.length : 0;
   const pwrCards = pickCards.filter(c => c.pwr > 0);
@@ -268,30 +268,78 @@ function DraftResults({ picks, allCards, draftType, saveDraftType, username, onS
         ))}
       </div>
 
-      {/* Actions */}
-      <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
-        {!saved ? (
-          <button onClick={onSave}
+      {/* Comment + Save */}
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
+        {!saved && (
+          <textarea
+            id="draft-comment"
+            placeholder="Add a comment about your draft strategy... (optional)"
+            maxLength={500}
             style={{
-              padding: "10px 24px", borderRadius: 8, border: "none",
-              background: T.accent, color: "#fff",
-              fontSize: 14, fontWeight: 700, cursor: "pointer",
-            }}>
-            Save to Community
-          </button>
-        ) : (
-          <div style={{ padding: "10px 24px", borderRadius: 8, background: T.greenLight, color: T.green, fontSize: 14, fontWeight: 600 }}>
-            Saved!
-          </div>
+              width: "100%", maxWidth: 500, padding: "10px 14px", borderRadius: 8,
+              border: `1px solid ${T.border}`, background: T.surface,
+              fontSize: 13, color: T.text, resize: "vertical", minHeight: 60,
+              fontFamily: "Inter, system-ui, sans-serif", outline: "none",
+            }}
+            onFocus={e => e.target.style.borderColor = T.accent}
+            onBlur={e => e.target.style.borderColor = T.border}
+          />
         )}
-        <button onClick={onNewDraft}
-          style={{
-            padding: "10px 24px", borderRadius: 8,
-            border: `1px solid ${T.border}`, background: T.surface,
-            color: T.text, fontSize: 14, fontWeight: 600, cursor: "pointer",
-          }}>
-          New Draft
-        </button>
+
+        <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
+          {!saved ? (
+            <button onClick={onSave} disabled={saving}
+              style={{
+                padding: "10px 24px", borderRadius: 8, border: "none",
+                background: saving ? T.textMuted : T.accent, color: "#fff",
+                fontSize: 14, fontWeight: 700,
+                cursor: saving ? "not-allowed" : "pointer",
+                opacity: saving ? 0.7 : 1,
+                transition: "all 0.15s",
+              }}>
+              {saving ? "Saving..." : "Save to Community"}
+            </button>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+              <div style={{ padding: "10px 24px", borderRadius: 8, background: T.greenLight, color: T.green, fontSize: 14, fontWeight: 600 }}>
+                Saved!
+              </div>
+              {/* Twin notification */}
+              {saveResult && saveResult.twins > 0 && (
+                <div style={{
+                  padding: "8px 16px", borderRadius: 8, background: "#fef2f2",
+                  border: `1px solid ${T.red}33`, color: T.red,
+                  fontSize: 12, fontWeight: 600, textAlign: "center",
+                }}>
+                  {"\uD83D\uDC6F"} {saveResult.twins} other player{saveResult.twins > 1 ? "s" : ""} drafted the exact same hand!
+                  {saveResult.twinUsers && saveResult.twinUsers.length > 0 && (
+                    <div style={{ fontSize: 11, fontWeight: 400, marginTop: 4, color: T.textSecondary }}>
+                      {saveResult.twinUsers.map(u => u.username).join(", ")}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          <button onClick={onNewDraft}
+            style={{
+              padding: "10px 24px", borderRadius: 8,
+              border: `1px solid ${T.border}`, background: T.surface,
+              color: T.text, fontSize: 14, fontWeight: 600, cursor: "pointer",
+            }}>
+            New Draft
+          </button>
+          {onViewHands && (
+            <button onClick={() => onViewHands(saveDraftType)}
+              style={{
+                padding: "10px 24px", borderRadius: 8,
+                border: `1px solid ${T.blue}44`, background: "#eff6ff",
+                color: T.blue, fontSize: 14, fontWeight: 600, cursor: "pointer",
+              }}>
+              {"\uD83C\uDCCF"} Browse Community Hands
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -392,7 +440,7 @@ function CommunityStats({ allCards, draftType }) {
 
 
 // ── Main Drafter Component ──────────────────────────────────────────────────
-export default function Drafter({ allCards, norwayOnly, setNorwayOnly }) {
+export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHands }) {
   const [drafterMode, setDrafterMode] = useState(null); // null = mode picker, "full" | "mini"
   const [phase, setPhase] = useState("setup");
   const [draftType, setDraftType] = useState("Occupation");
@@ -405,6 +453,8 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly }) {
   const [pickOrder, setPickOrder] = useState([]);
   const [round, setRound] = useState(1);
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveResult, setSaveResult] = useState(null); // response from save including twin info
   const [lastPickPopularity, setLastPickPopularity] = useState({}); // cardId -> % who drafted it
 
   const [showCommunity, setShowCommunity] = useState(false);
@@ -552,13 +602,20 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly }) {
   }, [packs, myPicks, pickOrder, round, maxPicks, isMini, popularityMap]);
 
   const handleSave = useCallback(async () => {
+    if (saving) return; // prevent double-click
+    setSaving(true);
     try {
-      await saveDraft(username, saveDraftType, myPicks, pickOrder);
+      const commentEl = document.getElementById("draft-comment");
+      const comment = commentEl ? commentEl.value.trim() : "";
+      const result = await saveDraft(username, saveDraftType, myPicks, pickOrder, comment);
       setSaved(true);
+      setSaveResult(result);
     } catch (err) {
       console.error("Failed to save draft:", err);
+    } finally {
+      setSaving(false);
     }
-  }, [username, saveDraftType, myPicks, pickOrder]);
+  }, [username, saveDraftType, myPicks, pickOrder, saving]);
 
   const resetDraft = useCallback(() => {
     setPhase("setup");
@@ -566,6 +623,8 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly }) {
     setPickOrder([]);
     setPacks([[], [], [], []]);
     setSaved(false);
+    setSaving(false);
+    setSaveResult(null);
     setShowCommunity(false);
     setLastPickPopularity({});
   }, []);
@@ -989,7 +1048,10 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly }) {
           onSave={handleSave}
           onNewDraft={resetDraft}
           saved={saved}
+          saving={saving}
           isMini={isMini}
+          saveResult={saveResult}
+          onViewHands={onViewHands}
         />
 
         <div style={{ maxWidth: 900, margin: "0 auto", padding: "0 24px 24px" }}>

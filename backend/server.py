@@ -5,9 +5,12 @@ Endpoints:
   GET  /api/cards              → full card list as JSON (for graph / table)
   POST /api/sparql             → run arbitrary SPARQL, return {columns, rows}
   GET  /api/meta               → gain/affect/deck/type facets for filter chips
-  POST /api/drafts             → save a completed draft hand
+  POST /api/drafts             → save a completed draft hand (returns twin count)
   GET  /api/drafts             → list all saved draft hands
   GET  /api/drafts/stats       → community pick popularity stats
+  GET  /api/hands              → search community hands by card name / player nick
+  GET  /api/hands/twins/{hash} → find hands with identical card selections
+  GET  /api/hands/popular      → most popular cards across community hands
   GET  /                       → serve the built React frontend (index.html)
 """
 
@@ -250,13 +253,29 @@ def _get_db() -> sqlite3.Connection:
             timestamp  TEXT NOT NULL
         )
     """)
+    # Migration: add comment and picksHash columns if missing
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(drafts)").fetchall()}
+    if "comment" not in cols:
+        conn.execute("ALTER TABLE drafts ADD COLUMN comment TEXT DEFAULT ''")
+    if "picksHash" not in cols:
+        conn.execute("ALTER TABLE drafts ADD COLUMN picksHash TEXT DEFAULT ''")
+        # Backfill picksHash for existing rows
+        for row in conn.execute("SELECT id, picks FROM drafts").fetchall():
+            h = _picks_hash(json.loads(row[1]))
+            conn.execute("UPDATE drafts SET picksHash = ? WHERE id = ?", (h, row[0]))
     conn.commit()
     return conn
+
+
+def _picks_hash(picks: list[str]) -> str:
+    """Deterministic hash of a hand (sorted card IDs) for duplicate detection."""
+    return hashlib.md5("|".join(sorted(picks)).encode()).hexdigest()
 
 def _row_to_dict(row: sqlite3.Row) -> dict:
     d = dict(row)
     d["picks"] = json.loads(d["picks"])
     d["pickOrder"] = json.loads(d["pickOrder"])
+    d["comment"] = d.get("comment") or ""
     return d
 
 class DraftSaveRequest(BaseModel):
@@ -264,6 +283,7 @@ class DraftSaveRequest(BaseModel):
     draftType: str             # "Occupation", "MinorImprovement", "MiniOccupation", "MiniMinorImprovement"
     picks: list[str]           # card IDs in pick order
     pickOrder: list[int]       # round number for each pick
+    comment: str = ""          # optional player note
 
 _VALID_DRAFT_TYPES = {"Occupation", "MinorImprovement", "MiniOccupation", "MiniMinorImprovement"}
 _PICK_COUNTS = {"Occupation": 7, "MinorImprovement": 7, "MiniOccupation": 5, "MiniMinorImprovement": 5}
@@ -280,22 +300,40 @@ def save_draft(req: DraftSaveRequest):
 
     draft_id = hashlib.md5(f"{req.username}{time.time()}".encode()).hexdigest()[:12]
     ts = datetime.datetime.utcnow().isoformat() + "Z"
+    ph = _picks_hash(req.picks)
 
     conn = _get_db()
     conn.execute(
-        "INSERT INTO drafts (id, username, draftType, picks, pickOrder, timestamp) VALUES (?,?,?,?,?,?)",
+        "INSERT INTO drafts (id, username, draftType, picks, pickOrder, timestamp, comment, picksHash) VALUES (?,?,?,?,?,?,?,?)",
         (draft_id, req.username.strip(), req.draftType,
-         json.dumps(req.picks), json.dumps(req.pickOrder), ts),
+         json.dumps(req.picks), json.dumps(req.pickOrder), ts,
+         (req.comment or "").strip()[:500], ph),
     )
     conn.commit()
+    conn.close()
+
+    # Count twins (other hands with the exact same picks)
+    twin_count = conn.execute(
+        "SELECT COUNT(*) FROM drafts WHERE picksHash = ? AND id != ?", (ph, draft_id)
+    ).fetchone()[0]
+    twin_rows = conn.execute(
+        "SELECT id, username, timestamp FROM drafts WHERE picksHash = ? AND id != ? ORDER BY timestamp DESC LIMIT 5",
+        (ph, draft_id)
+    ).fetchall()
     conn.close()
 
     entry = {
         "id": draft_id, "username": req.username.strip(),
         "draftType": req.draftType, "picks": req.picks,
         "pickOrder": req.pickOrder, "timestamp": ts,
+        "comment": (req.comment or "").strip()[:500],
+        "picksHash": ph,
     }
-    return {"ok": True, "draft": entry}
+    return {
+        "ok": True, "draft": entry,
+        "twins": twin_count,
+        "twinUsers": [{"id": r[0], "username": r[1], "timestamp": r[2]} for r in twin_rows],
+    }
 
 @app.get("/api/drafts")
 def list_drafts(username: Optional[str] = None, draftType: Optional[str] = None):
@@ -349,6 +387,129 @@ def draft_stats(draftType: Optional[str] = None):
         "roundTop": round_top,
         "overallTop": [{"cardId": cid, "count": cnt} for cid, cnt in overall_top],
     }
+
+# ── Community Hands endpoints ────────────────────────────────────────────────
+
+# Pre-compute card name → id lookup for search
+_CARD_NAME_MAP: dict[str, str] = {c["name"].lower(): c["id"] for c in ALL_CARDS}
+_CARD_ID_TO_NAME: dict[str, str] = {c["id"]: c["name"] for c in ALL_CARDS}
+
+@app.get("/api/hands")
+def search_hands(
+    q: Optional[str] = None,
+    draftType: Optional[str] = None,
+    page: int = 1,
+    pageSize: int = 20,
+):
+    """Search community hands by card name or player nickname."""
+    conn = _get_db()
+    base = "SELECT * FROM drafts WHERE 1=1"
+    count_base = "SELECT COUNT(*) FROM drafts WHERE 1=1"
+    params: list = []
+    count_params: list = []
+
+    if draftType:
+        base += " AND draftType = ?"
+        count_base += " AND draftType = ?"
+        params.append(draftType)
+        count_params.append(draftType)
+
+    if q:
+        q_lower = q.strip().lower()
+        # Find card IDs whose name contains the search query
+        matching_card_ids = [cid for name, cid in _CARD_NAME_MAP.items() if q_lower in name]
+
+        if matching_card_ids:
+            # Search both username and card picks
+            card_likes = " OR ".join(["picks LIKE ?" for _ in matching_card_ids])
+            clause = f" AND (LOWER(username) LIKE ? OR {card_likes})"
+            base += clause
+            count_base += clause
+            like_param = f"%{q_lower}%"
+            card_params = [f"%{cid}%" for cid in matching_card_ids]
+            params.extend([like_param] + card_params)
+            count_params.extend([like_param] + card_params)
+        else:
+            # Only search username
+            base += " AND LOWER(username) LIKE ?"
+            count_base += " AND LOWER(username) LIKE ?"
+            like_param = f"%{q_lower}%"
+            params.append(like_param)
+            count_params.append(like_param)
+
+    total = conn.execute(count_base, count_params).fetchone()[0]
+
+    base += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+    params.extend([min(pageSize, 50), (page - 1) * min(pageSize, 50)])
+
+    rows = conn.execute(base, params).fetchall()
+    conn.close()
+
+    drafts = [_row_to_dict(r) for r in rows]
+    # Enrich each draft with picksHash and card names for frontend
+    for d in drafts:
+        d["cardNames"] = [_CARD_ID_TO_NAME.get(pid, pid) for pid in d["picks"]]
+
+    return {
+        "hands": drafts,
+        "total": total,
+        "page": page,
+        "pageSize": min(pageSize, 50),
+        "totalPages": max(1, (total + min(pageSize, 50) - 1) // min(pageSize, 50)),
+    }
+
+
+@app.get("/api/hands/twins/{picks_hash}")
+def get_twins(picks_hash: str):
+    """Get all hands with the same picksHash (identical card selections)."""
+    conn = _get_db()
+    rows = conn.execute(
+        "SELECT * FROM drafts WHERE picksHash = ? ORDER BY timestamp ASC",
+        (picks_hash,)
+    ).fetchall()
+    conn.close()
+    drafts = [_row_to_dict(r) for r in rows]
+    for d in drafts:
+        d["cardNames"] = [_CARD_ID_TO_NAME.get(pid, pid) for pid in d["picks"]]
+    return {"twins": drafts, "total": len(drafts)}
+
+
+@app.get("/api/hands/popular")
+def popular_cards(draftType: Optional[str] = None, limit: int = 15):
+    """Most popular cards across all community hands, with pick count and percentage."""
+    conn = _get_db()
+    query = "SELECT picks FROM drafts"
+    params: list = []
+    if draftType:
+        query += " WHERE draftType = ?"
+        params.append(draftType)
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+
+    total_hands = len(rows)
+    if total_hands == 0:
+        return {"cards": [], "totalHands": 0}
+
+    card_counts: dict[str, int] = {}
+    for row in rows:
+        picks = json.loads(row["picks"])
+        for card_id in picks:
+            card_counts[card_id] = card_counts.get(card_id, 0) + 1
+
+    sorted_cards = sorted(card_counts.items(), key=lambda x: x[1], reverse=True)[:min(limit, 30)]
+    return {
+        "cards": [
+            {
+                "cardId": cid,
+                "cardName": _CARD_ID_TO_NAME.get(cid, cid),
+                "count": cnt,
+                "percentage": round(cnt / total_hands * 100, 1),
+            }
+            for cid, cnt in sorted_cards
+        ],
+        "totalHands": total_hands,
+    }
+
 
 # ── Image proxy (avoids mixed-content blocking) ─────────────────────────────
 

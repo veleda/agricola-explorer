@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import * as d3 from "d3";
 import Drafter from "./drafter.jsx";
+import CommunityHands from "./hands.jsx";
 
 // ── API helpers ─────────────────────────────────────────────────────────────
 const API_BASE = "";  // same origin in production; Vite proxy in dev
@@ -43,6 +44,24 @@ const DECK_COLOURS = {
   Fr: "#10b981", Wm: "#ef4444", G: "#6366f1", G4: "#14b8a6",
   G5: "#f97316", G6: "#a855f7", G7: "#06b6d4",
 };
+
+// PWR-based colour scheme for Explorer graph & table
+// Three tiers: low (<1), medium (1–2), high (>2)
+const PWR_COLOURS = {
+  low:    "#64748b",  // slate – weak cards
+  mid:    "#3b82f6",  // blue – average
+  high:   "#10b981",  // green – strong
+  banned: "#6b7280",  // grey
+  none:   "#475569",  // no PWR data
+};
+function pwrColor(card) {
+  if (card.banned) return PWR_COLOURS.banned;
+  const p = card.pwr || 0;
+  if (p <= 0) return PWR_COLOURS.none;
+  if (p < 1) return PWR_COLOURS.low;
+  if (p <= 2) return PWR_COLOURS.mid;
+  return PWR_COLOURS.high;
+}
 const TYPE_ICONS = { Occupation: "\uD83D\uDC64", MinorImprovement: "\uD83D\uDD27", MajorImprovement: "\u2B50" };
 
 const PRESET_QUERIES = [
@@ -172,9 +191,9 @@ function GraphView({ cards, onSelectCard, selectedId, onOverflow }) {
 
     const circles = node.filter(d => d.nodeType === "card").append("circle")
       .attr("r", d => 6 + (d.winRatio || 0) * 20)
-      .attr("fill", d => d.banned ? "#991b1b" : (DECK_COLOURS[d.deck] || "#94a3b8"))
-      .attr("stroke", d => d.banned ? "#dc2626" : "transparent")
-      .attr("stroke-width", 3).attr("opacity", d => d.banned ? 0.9 : 0.85);
+      .attr("fill", d => pwrColor(d))
+      .attr("stroke", d => d.banned ? "#9ca3af" : "transparent")
+      .attr("stroke-width", 3).attr("opacity", d => d.banned ? 0.5 : 0.85);
 
     // Store reference so the highlight effect can update strokes without rebuilding
     circlesRef.current = circles;
@@ -327,7 +346,7 @@ function CardDetail({ card, onClose, onFilterGain, onFilterAffect, onFilterPrere
           <div style={{ fontSize: 16, fontWeight: 700, color: "#f1f5f9" }}>{card.name}</div>
           <div style={{ fontSize: 11, color: "#94a3b8" }}>
             {card.type.replace(/([A-Z])/g, " $1").trim()} · Deck {card.deck}
-            {card.banned && <span style={{ marginLeft: 6, color: "#dc2626", fontWeight: 600 }}>BANNED</span>}
+            {card.banned && <span style={{ marginLeft: 6, color: "#6b7280", fontWeight: 600 }}>BANNED</span>}
           </div>
         </div>
       </div>
@@ -573,14 +592,16 @@ function Drawer({ open, onClose, side, children, title }) {
 export default function App() {
   const isMobile = useIsMobile();
 
-  // App mode: "explorer" | "drafter"
+  // App mode: "explorer" | "drafter" | "hands"
   const [appMode, setAppMode] = useState("explorer");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [handsDraftType, setHandsDraftType] = useState(null); // for linking from drafter
 
-  // Auto-collapse sidebar when entering drafter, expand when returning to explorer
-  const setAppModeWithSidebar = useCallback((mode) => {
+  // Auto-collapse sidebar when entering drafter/hands, expand when returning to explorer
+  const setAppModeWithSidebar = useCallback((mode, opts) => {
     setAppMode(mode);
-    setSidebarCollapsed(mode === "drafter");
+    setSidebarCollapsed(mode === "drafter" || mode === "hands");
+    if (opts?.draftType) setHandsDraftType(opts.draftType);
   }, []);
 
   // Data from backend
@@ -798,8 +819,25 @@ export default function App() {
               <span style={{ color: appMode === "drafter" ? "#f59e0b" : "#64748b" }}>Agricola</span> Drafter
             </div>
           </button>
+          <button onClick={() => setAppModeWithSidebar("hands")}
+            style={{
+              display: "block", width: "100%", textAlign: "left", background: "none", border: "none",
+              cursor: "pointer", padding: 0, marginTop: 2,
+            }}>
+            <div style={{
+              fontSize: 14, fontWeight: 600, letterSpacing: -0.3,
+              color: appMode === "hands" ? "#f1f5f9" : "#475569",
+              transition: "color 0.15s",
+              display: "flex", alignItems: "center", gap: 6,
+            }}>
+              <span style={{ fontSize: 14 }}>{"\uD83C\uDCCF"}</span>
+              <span style={{ color: appMode === "hands" ? "#f59e0b" : "#64748b" }}>Community Hands</span>
+            </div>
+          </button>
           <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>
-            {appMode === "explorer" ? `Knowledge Graph · ${activeCards.length} cards` : "Draft cards against 3 NPCs"}
+            {appMode === "explorer" ? `Knowledge Graph · ${activeCards.length} cards`
+             : appMode === "drafter" ? "Draft cards against 3 NPCs"
+             : "Browse community draft hands"}
           </div>
         </div>
       )}
@@ -903,25 +941,26 @@ export default function App() {
 
   // ── MOBILE LAYOUT ─────────────────────────────────────────────────────
   if (isMobile) {
-    // Drafter mode on mobile
-    // Shared mobile mode toggle button — taps to swap between Explorer and Drafter
+    // Mobile mode switcher — cycle through Explorer → Drafter → Hands
+    const mobileModeCycle = { explorer: "drafter", drafter: "hands", hands: "explorer" };
+    const mobileModeLabels = { explorer: "Explorer", drafter: "Drafter", hands: "Hands" };
     const mobileModeSwitcher = (
-      <button onClick={() => setAppModeWithSidebar(appMode === "explorer" ? "drafter" : "explorer")}
+      <button onClick={() => setAppModeWithSidebar(mobileModeCycle[appMode] || "explorer")}
         style={{
           background: "#1e293b", border: "1px solid #334155", borderRadius: 8,
           color: "#f59e0b", padding: "8px 12px", fontSize: 13, fontWeight: 700,
           cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
           whiteSpace: "nowrap",
         }}>
-        <span style={{ fontSize: 11, color: "#64748b" }}>{appMode === "explorer" ? "Draft" : "Explore"} {"\u2192"}</span>
-        {appMode === "explorer" ? "Explorer" : "Drafter"}
+        <span style={{ fontSize: 11, color: "#64748b" }}>{mobileModeLabels[mobileModeCycle[appMode]]} {"\u2192"}</span>
+        {mobileModeLabels[appMode]}
       </button>
     );
 
-    if (appMode === "drafter") {
+    if (appMode === "drafter" || appMode === "hands") {
       return (
         <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: "#0f172a", color: "#e2e8f0", fontFamily: "Inter, system-ui, sans-serif" }}>
-          {/* Mobile drafter header */}
+          {/* Mobile drafter/hands header */}
           <div style={{
             display: "flex", alignItems: "center", padding: "10px 12px",
             borderBottom: "1px solid #1e293b", gap: 8, flexShrink: 0,
@@ -929,7 +968,10 @@ export default function App() {
             {mobileModeSwitcher}
           </div>
           <div style={{ flex: 1, overflow: "hidden" }}>
-            <Drafter allCards={activeCards} norwayOnly={norwayOnly} setNorwayOnly={setNorwayOnly} />
+            {appMode === "drafter"
+              ? <Drafter allCards={activeCards} norwayOnly={norwayOnly} setNorwayOnly={setNorwayOnly} onViewHands={(dt) => setAppModeWithSidebar("hands", { draftType: dt })} />
+              : <CommunityHands allCards={allCards} initialDraftType={handsDraftType} />
+            }
           </div>
         </div>
       );
@@ -1020,13 +1062,13 @@ export default function App() {
                 </thead>
                 <tbody>
                   {sorted.map(c => {
-                    const bannedBg = c.banned ? "#450a0a" : "transparent";
-                    const rowBg = c.id === selectedId ? (c.banned ? "#5c1010" : "#1e293b") : bannedBg;
+                    const bannedBg = c.banned ? "#1e1e24" : "transparent";
+                    const rowBg = c.id === selectedId ? (c.banned ? "#2a2a32" : "#1e293b") : bannedBg;
                     return (
                     <tr key={c.id} onClick={() => handleSelectCard(c.id)}
                       style={{ borderBottom: "1px solid #1e293b11", cursor: "pointer", background: rowBg }}>
                       <td style={{ padding: "5px 4px", fontWeight: 500, color: "#f1f5f9", maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        <span style={{ color: DECK_COLOURS[c.deck] || "#94a3b8", marginRight: 3 }}>{"\u25CF"}</span>{c.name}
+                        <span style={{ color: pwrColor(c), marginRight: 3 }}>{"\u25CF"}</span>{c.name}
                       </td>
                       <td style={{ padding: "5px 4px", color: "#94a3b8" }}>{c.deck}</td>
                       <td style={{ padding: "5px 4px", fontVariantNumeric: "tabular-nums", color: c.winRatio > 0.33 ? "#10b981" : "#94a3b8" }}>
@@ -1085,7 +1127,7 @@ export default function App() {
         ) : (
           <>
             {filterContent}
-            {appMode === "drafter" && (
+            {(appMode === "drafter" || appMode === "hands") && (
               <button onClick={() => setSidebarCollapsed(true)}
                 style={{
                   background: "none", border: "none", borderTop: "1px solid #1e293b",
@@ -1097,10 +1139,14 @@ export default function App() {
         )}
       </div>
 
-      {/* ── Centre: Drafter OR Explorer ── */}
+      {/* ── Centre: Drafter / Hands / Explorer ── */}
       {appMode === "drafter" ? (
         <div style={{ flex: 1, overflow: "hidden" }}>
-          <Drafter allCards={activeCards} norwayOnly={norwayOnly} setNorwayOnly={setNorwayOnly} />
+          <Drafter allCards={activeCards} norwayOnly={norwayOnly} setNorwayOnly={setNorwayOnly} onViewHands={(dt) => setAppModeWithSidebar("hands", { draftType: dt })} />
+        </div>
+      ) : appMode === "hands" ? (
+        <div style={{ flex: 1, overflow: "hidden" }}>
+          <CommunityHands allCards={allCards} initialDraftType={handsDraftType} />
         </div>
       ) : (
       <>
@@ -1134,11 +1180,18 @@ export default function App() {
             </button>
           )}
 
-          {/* Legend */}
-          <div style={{ marginLeft: "auto", display: "flex", gap: 12, fontSize: 10, color: "#64748b" }}>
-            {Object.entries(DECK_COLOURS).slice(0, 7).map(([k, v]) => (
-              <span key={k} style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                <span style={{ width: 8, height: 8, borderRadius: 99, background: v, display: "inline-block" }} />{k}
+          {/* PWR Legend */}
+          <div style={{ marginLeft: "auto", display: "flex", gap: 12, fontSize: 10, color: "#64748b", alignItems: "center" }}>
+            <span style={{ fontWeight: 600, color: "#94a3b8" }}>PWR:</span>
+            {[
+              ["< 1", PWR_COLOURS.low],
+              ["1\u20132", PWR_COLOURS.mid],
+              ["> 2", PWR_COLOURS.high],
+              ["N/A", PWR_COLOURS.none],
+              ["Banned", PWR_COLOURS.banned],
+            ].map(([label, color]) => (
+              <span key={label} style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                <span style={{ width: 8, height: 8, borderRadius: 99, background: color, display: "inline-block", opacity: label === "Banned" ? 0.5 : 0.85 }} />{label}
               </span>
             ))}
           </div>
@@ -1184,19 +1237,19 @@ export default function App() {
                 </thead>
                 <tbody>
                   {sorted.map(c => {
-                    const bannedBg = c.banned ? "#450a0a" : "transparent";
-                    const rowBg = c.id === selectedId ? (c.banned ? "#5c1010" : "#1e293b") : bannedBg;
+                    const bannedBg = c.banned ? "#1e1e24" : "transparent";
+                    const rowBg = c.id === selectedId ? (c.banned ? "#2a2a32" : "#1e293b") : bannedBg;
                     return (
                     <tr key={c.id} onClick={() => handleSelectCard(c.id)}
                       style={{
                         borderBottom: "1px solid #1e293b11", cursor: "pointer",
                         background: rowBg,
                       }}
-                      onMouseEnter={e => { if (c.id !== selectedId) e.currentTarget.style.background = c.banned ? "#5c1010" : "#1e293b66"; }}
+                      onMouseEnter={e => { if (c.id !== selectedId) e.currentTarget.style.background = c.banned ? "#2a2a32" : "#1e293b66"; }}
                       onMouseLeave={e => { if (c.id !== selectedId) e.currentTarget.style.background = bannedBg; }}
                     >
                       <td style={{ padding: "6px", fontWeight: 500, color: "#f1f5f9" }}>
-                        <span style={{ color: DECK_COLOURS[c.deck] || "#94a3b8", marginRight: 4 }}>{"\u25CF"}</span>{c.name}
+                        <span style={{ color: pwrColor(c), marginRight: 4 }}>{"\u25CF"}</span>{c.name}
                       </td>
                       <td style={{ padding: "6px", color: "#94a3b8" }}>{c.deck}</td>
                       <td style={{ padding: "6px" }}>{TYPE_ICONS[c.type]} {c.type.replace(/([A-Z])/g, " $1").trim()}</td>
