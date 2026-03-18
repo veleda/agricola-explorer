@@ -377,6 +377,76 @@ function ClickableChip({ label, color, bgColor, borderColor, onClick }) {
   );
 }
 
+function CardSearchBox({ allCards, onSelect, themeE }) {
+  const [query, setQuery] = useState("");
+  const [focused, setFocused] = useState(false);
+
+  const matches = useMemo(() => {
+    if (!query.trim()) return [];
+    const q = query.toLowerCase();
+    return allCards.filter(c => c.name.toLowerCase().includes(q)).slice(0, 8);
+  }, [query, allCards]);
+
+  const showDropdown = focused && query.trim().length > 0 && matches.length > 0;
+
+  return (
+    <div style={{ position: "relative" }}>
+      <div style={{ position: "relative" }}>
+        <span style={{
+          position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)",
+          fontSize: 12, color: themeE.textDim, pointerEvents: "none",
+        }}>{"\uD83D\uDD0D"}</span>
+        <input
+          type="text"
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setTimeout(() => setFocused(false), 150)}
+          placeholder="Search card by name..."
+          style={{
+            width: "100%", padding: "7px 10px 7px 28px", borderRadius: 6,
+            border: `1px solid ${focused ? themeE.accent : themeE.border}`,
+            background: themeE.bg, fontSize: 12, color: themeE.text,
+            outline: "none", boxSizing: "border-box",
+            transition: "border-color 0.15s",
+          }}
+        />
+      </div>
+      {showDropdown && (
+        <div style={{
+          position: "absolute", top: "100%", left: 0, right: 0, zIndex: 50,
+          background: themeE.surface, border: `1px solid ${themeE.border}`,
+          borderRadius: 6, marginTop: 2, boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
+          maxHeight: 240, overflow: "auto",
+        }}>
+          {matches.map(c => (
+            <button key={c.id}
+              onMouseDown={() => { onSelect(c.id); setQuery(""); }}
+              style={{
+                display: "flex", alignItems: "center", gap: 8,
+                width: "100%", padding: "6px 10px", border: "none",
+                background: "transparent", cursor: "pointer", textAlign: "left",
+                borderBottom: `1px solid ${themeE.border}11`,
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = themeE.tableHoverBg}
+              onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+            >
+              <span style={{ color: pwrColor(c), fontSize: 10 }}>{"\u25CF"}</span>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 500, color: themeE.text }}>{c.name}</div>
+                <div style={{ fontSize: 10, color: themeE.textMuted }}>
+                  {c.deck} · {c.type.replace(/([A-Z])/g, " $1").trim()}
+                  {c.winRatio > 0 && <span style={{ color: themeE.blue, marginLeft: 4 }}>Win {(c.winRatio * 100).toFixed(0)}%</span>}
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CardDetail({ card, onClose, onFilterGain, onFilterAffect, onFilterPrereq, onSelectCardByName, themeE }) {
   if (!card) return (
     <div style={{ padding: 24, color: themeE.textDim, fontSize: 13, textAlign: "center" }}>
@@ -1177,6 +1247,9 @@ export default function App() {
         </Drawer>
 
         <Drawer open={showInspector} onClose={() => setShowInspector(false)} side="right" title="Card Inspector" themeE={E}>
+          <div style={{ padding: "8px 12px", borderBottom: `1px solid ${E.border}` }}>
+            <CardSearchBox allCards={allCards} onSelect={(id) => { handleSelectCard(id); }} themeE={E} />
+          </div>
           <CardDetail card={selected} onClose={() => setShowInspector(false)}
             onFilterGain={handleFilterGain} onFilterAffect={handleFilterAffect}
             onFilterPrereq={handleFilterPrereq} onSelectCardByName={handleSelectCardByName} themeE={E} />
@@ -1367,10 +1440,14 @@ export default function App() {
 
       {/* ── Right sidebar: Card Inspector ── */}
       <div style={{ width: 280, borderLeft: `1px solid ${E.border}`, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        <div style={{ padding: "10px 12px", borderBottom: `1px solid ${E.border}`, flexShrink: 0,
-          background: E.surface, color: E.textSecondary, fontSize: 11, textTransform: "uppercase", letterSpacing: 1,
-          fontWeight: 600, textAlign: "center" }}>
-          Card Inspector
+        <div style={{ borderBottom: `1px solid ${E.border}`, flexShrink: 0, background: E.surface }}>
+          <div style={{ padding: "10px 12px 6px", color: E.textSecondary, fontSize: 11, textTransform: "uppercase", letterSpacing: 1,
+            fontWeight: 600, textAlign: "center" }}>
+            Card Inspector
+          </div>
+          <div style={{ padding: "0 10px 10px" }}>
+            <CardSearchBox allCards={allCards} onSelect={handleSelectCard} themeE={E} />
+          </div>
         </div>
         <div style={{ flex: 1, overflow: "auto" }}>
           <CardDetail card={selected} onClose={() => setSelectedId(null)}
