@@ -72,7 +72,12 @@ async function saveDraft(username, draftType, picks, pickOrder, comment) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, draftType, picks, pickOrder, comment: comment || "" }),
   });
-  return res.json();
+  const data = await res.json();
+  // 409 = already saved this exact hand — treat as success but flag it
+  if (res.status === 409) {
+    return { ...data, ok: true, alreadySaved: true };
+  }
+  return data;
 }
 
 async function fetchDrafts(username, draftType) {
@@ -302,7 +307,7 @@ function DraftResults({ picks, allCards, draftType, saveDraftType, username, onS
           ) : (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
               <div style={{ padding: "10px 24px", borderRadius: 8, background: T.greenLight, color: T.green, fontSize: 14, fontWeight: 600 }}>
-                Saved!
+                {saveResult?.alreadySaved ? "Already saved!" : "Saved!"}
               </div>
               {/* Twin notification */}
               {saveResult && saveResult.twins > 0 && (

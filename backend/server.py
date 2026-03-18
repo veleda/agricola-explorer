@@ -303,6 +303,29 @@ def save_draft(req: DraftSaveRequest):
     ph = _picks_hash(req.picks)
 
     conn = _get_db()
+
+    # Prevent same user saving the exact same hand twice
+    existing = conn.execute(
+        "SELECT id FROM drafts WHERE username = ? AND picksHash = ? AND draftType = ?",
+        (req.username.strip(), ph, req.draftType)
+    ).fetchone()
+    if existing:
+        # Still return twin info so the UI shows it
+        twin_count = conn.execute(
+            "SELECT COUNT(*) FROM drafts WHERE picksHash = ? AND id != ?", (ph, existing[0])
+        ).fetchone()[0]
+        twin_rows = conn.execute(
+            "SELECT id, username, timestamp FROM drafts WHERE picksHash = ? AND id != ? ORDER BY timestamp DESC LIMIT 5",
+            (ph, existing[0])
+        ).fetchall()
+        conn.close()
+        return JSONResponse(status_code=409, content={
+            "error": "You already saved this exact hand",
+            "ok": False,
+            "twins": twin_count,
+            "twinUsers": [{"id": r[0], "username": r[1], "timestamp": r[2]} for r in twin_rows],
+        })
+
     conn.execute(
         "INSERT INTO drafts (id, username, draftType, picks, pickOrder, timestamp, comment, picksHash) VALUES (?,?,?,?,?,?,?,?)",
         (draft_id, req.username.strip(), req.draftType,
@@ -310,7 +333,6 @@ def save_draft(req: DraftSaveRequest):
          (req.comment or "").strip()[:500], ph),
     )
     conn.commit()
-    conn.close()
 
     # Count twins (other hands with the exact same picks)
     twin_count = conn.execute(
