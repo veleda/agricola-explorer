@@ -41,28 +41,20 @@ function shuffle(arr) {
   return a;
 }
 
-// Full Draft NPC: mix of random and win-ratio based
-function npcPickFull(cards, strategyIndex) {
-  if (cards.length === 0) return null;
-  if (strategyIndex === 0) return cards[Math.floor(Math.random() * cards.length)];
-  const sorted = [...cards].sort((a, b) => (b.winRatio || 0) - (a.winRatio || 0));
-  const topN = sorted.slice(0, Math.min(3, sorted.length));
-  return topN[Math.floor(Math.random() * topN.length)];
-}
-
-// Mini Draft NPC: pick from top 3 by ADP (lower ADP = picked earlier = more popular)
-function npcPickMini(cards) {
+// NPC strategy (both Full and Mini): randomly pick one of the two best ADP cards
+function npcPick(cards) {
   if (cards.length === 0) return null;
   const withAdp = cards.filter(c => c.adp > 0);
-  const pool = withAdp.length >= 3 ? withAdp : cards;
-  // Sort ascending: lower ADP = better
-  const sorted = [...pool].sort((a, b) => {
-    const aAdp = a.adp > 0 ? a.adp : 99;
-    const bAdp = b.adp > 0 ? b.adp : 99;
-    return aAdp - bAdp;
-  });
-  const topN = sorted.slice(0, Math.min(3, sorted.length));
-  return topN[Math.floor(Math.random() * topN.length)];
+  if (withAdp.length > 0) {
+    // Sort ascending: lower ADP = picked earlier in tournaments = stronger
+    withAdp.sort((a, b) => a.adp - b.adp);
+    const top = withAdp.slice(0, Math.min(2, withAdp.length));
+    return top[Math.floor(Math.random() * top.length)];
+  }
+  // Fallback: pick from top 2 by win ratio if no ADP data
+  const sorted = [...cards].sort((a, b) => (b.winRatio || 0) - (a.winRatio || 0));
+  const top = sorted.slice(0, Math.min(2, sorted.length));
+  return top[Math.floor(Math.random() * top.length)];
 }
 
 // ── API helpers ─────────────────────────────────────────────────────────────
@@ -592,9 +584,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
     const newPacks = packs.map(pack => [...pack]);
     newPacks[0] = newPacks[0].filter(c => c.id !== card.id);
     for (let npc = 1; npc < NUM_PLAYERS; npc++) {
-      const pick = isMini
-        ? npcPickMini(newPacks[npc])
-        : npcPickFull(newPacks[npc], npc - 1);
+      const pick = npcPick(newPacks[npc]);
       if (pick) newPacks[npc] = newPacks[npc].filter(c => c.id !== pick.id);
     }
     const rotated = [newPacks[1], newPacks[2], newPacks[3], newPacks[0]];

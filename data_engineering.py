@@ -240,14 +240,18 @@ def _load_tournament_stats(csv_path: str = "data/agricola_cards_all.csv") -> dic
     return lookup
 
 
-def _load_database_xlsx(xlsx_path: str = "data/AgricolaCards_Database_260224.xlsx") -> dict:
-    """Load the curated card database XLSX, keyed by card_uuid.
+def _load_database_xlsx(xlsx_path: str = "data/AgricolaCards_Database_260224_v2.xlsx") -> dict:
+    """Load the curated card database XLSX (v2), keyed by card_uuid.
 
-    Returns new fields: PWRcorr, Deck2, has_bonus_symbol.
+    Returns fields: PWRcorr, ADPcorr, Deck2, has_bonus_symbol,
+    plus updated tournament stats (ADP, PWR, dealt, drafted, played, won).
     """
     import os
     if not os.path.exists(xlsx_path):
-        return {}
+        # Fall back to v1 if v2 not present
+        xlsx_path = "data/AgricolaCards_Database_260224.xlsx"
+        if not os.path.exists(xlsx_path):
+            return {}
     import openpyxl
     wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
     ws = wb["cards"]
@@ -264,10 +268,33 @@ def _load_database_xlsx(xlsx_path: str = "data/AgricolaCards_Database_260224.xls
             if v == "#N/A" or v == "N/A":
                 return None
             return v
+        def _float(v):
+            v = _clean(v)
+            if v is None:
+                return None
+            try:
+                return float(v)
+            except (ValueError, TypeError):
+                return None
+        def _int(v):
+            v = _clean(v)
+            if v is None:
+                return None
+            try:
+                return int(v)
+            except (ValueError, TypeError):
+                return None
         lookup[uuid] = {
-            "PWRcorr": _clean(d.get("PWRcorr")),
+            "PWRcorr": _float(d.get("PWRcorr")),
+            "ADPcorr": _float(d.get("ADPcorr")),
+            "ADP": _float(d.get("ADP")),
+            "PWR": _float(d.get("PWR")),
             "Deck2": d.get("Deck2"),
             "has_bonus_symbol": bool(d.get("has_bonus_symbol")),
+            "dealt": _int(d.get("dealt")),
+            "drafted": _int(d.get("drafted")),
+            "played": _int(d.get("played")),
+            "won": _int(d.get("won")),
         }
     wb.close()
     return lookup
@@ -332,6 +359,28 @@ def load_cards(json_path: str = "data/cards.json",
         imgs = c.get("card_image_urls") or []
         image_url = alt_url or (imgs[0] if imgs else None)
 
+        # v2 xlsx values override CSV stats when present
+        dealt = xlsx.get("dealt") if xlsx.get("dealt") is not None else st.get("dealt")
+        drafted = xlsx.get("drafted") if xlsx.get("drafted") is not None else st.get("drafted")
+        played = xlsx.get("played") if xlsx.get("played") is not None else st.get("played")
+        won = xlsx.get("won") if xlsx.get("won") is not None else st.get("won")
+        adp = xlsx.get("ADPcorr") or xlsx.get("ADP") or st.get("ADP")
+        pwr = xlsx.get("PWR") or st.get("PWR")
+
+        # Recompute play_ratio and win_ratio from updated stats
+        play_ratio = st.get("play_ratio")
+        win_ratio = st.get("win_ratio")
+        if dealt and played:
+            try:
+                play_ratio = float(played) / float(dealt)
+            except (ValueError, ZeroDivisionError):
+                pass
+        if played and won:
+            try:
+                win_ratio = float(won) / float(played)
+            except (ValueError, ZeroDivisionError):
+                pass
+
         rows.append({
             "Card_ID": c.get("card_uuid", ""),
             "Name": name,
@@ -346,15 +395,15 @@ def load_cards(json_path: str = "data/cards.json",
             "image_url": image_url,
             "card_creator": c.get("card_creator") or None,
             "is_passing_minor": c.get("is_passing_minor", False),
-            # Tournament stats (merged from CSV)
-            "dealt": st.get("dealt"),
-            "drafted": st.get("drafted"),
-            "played": st.get("played"),
-            "won": st.get("won"),
-            "ADP": st.get("ADP"),
-            "play_ratio": st.get("play_ratio"),
-            "win_ratio": st.get("win_ratio"),
-            "PWR": st.get("PWR"),
+            # Tournament stats (v2 xlsx overrides CSV when present)
+            "dealt": dealt,
+            "drafted": drafted,
+            "played": played,
+            "won": won,
+            "ADP": adp,
+            "play_ratio": play_ratio,
+            "win_ratio": win_ratio,
+            "PWR": pwr,
             "PWR_no_log": st.get("PWR_no_log"),
             "banned": st.get("banned"),
             "is_no": st.get("is_no"),
