@@ -58,11 +58,11 @@ function npcPick(cards) {
 }
 
 // ── API helpers ─────────────────────────────────────────────────────────────
-async function saveDraft(username, draftType, picks, pickOrder, comment) {
+async function saveDraft(username, draftType, picks, pickOrder, comment, combos) {
   const res = await fetch(`${API_BASE}/api/drafts`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, draftType, picks, pickOrder, comment: comment || "" }),
+    body: JSON.stringify({ username, draftType, picks, pickOrder, comment: comment || "", combos: combos || [] }),
   });
   const data = await res.json();
   // 409 = already saved this exact hand — treat as success but flag it
@@ -197,6 +197,29 @@ function DraftCard({ card, onPick, disabled, hideStats, pickPopularity }) {
 // ── Draft results screen ────────────────────────────────────────────────────
 function DraftResults({ picks, allCards, draftType, saveDraftType, username, onSave, onNewDraft, saved, saving, isMini, saveResult, onViewHands }) {
   const pickCards = picks.map(id => allCards.find(c => c.id === id)).filter(Boolean);
+
+  // Combo tagging state
+  const [combos, setCombos] = useState([]);        // saved combos: [{cardIds: [...], comment: ""}]
+  const [comboMode, setComboMode] = useState(false); // is selecting cards for a new combo
+  const [comboSelection, setComboSelection] = useState([]); // card IDs being selected
+  const [comboComment, setComboComment] = useState("");
+
+  const toggleComboCard = (cardId) => {
+    setComboSelection(prev =>
+      prev.includes(cardId) ? prev.filter(id => id !== cardId) : [...prev, cardId]
+    );
+  };
+  const saveCombo = () => {
+    if (comboSelection.length >= 2) {
+      setCombos(prev => [...prev, { cardIds: [...comboSelection], comment: comboComment.trim() }]);
+    }
+    setComboSelection([]);
+    setComboComment("");
+    setComboMode(false);
+  };
+  const removeCombo = (idx) => {
+    setCombos(prev => prev.filter((_, i) => i !== idx));
+  };
   const avgWin = pickCards.length > 0 ? pickCards.reduce((s, c) => s + (c.winRatio || 0), 0) / pickCards.length : 0;
   const pwrCards = pickCards.filter(c => c.pwr > 0);
   const avgPwr = pwrCards.length > 0 ? pwrCards.reduce((s, c) => s + c.pwr, 0) / pwrCards.length : 0;
@@ -236,19 +259,43 @@ function DraftResults({ picks, allCards, draftType, saveDraftType, username, onS
         ))}
       </div>
 
-      {/* Card images grid — reveal full stats */}
+      {/* Card images grid — reveal full stats, clickable in combo mode */}
+      {comboMode && (
+        <div style={{ textAlign: "center", marginBottom: 10, fontSize: 12, color: T.blue, fontWeight: 600 }}>
+          {"\uD83D\uDD17"} Click cards to select them for a combo ({comboSelection.length} selected)
+        </div>
+      )}
       <div style={{
         display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
         gap: 12, marginBottom: 24,
       }}>
-        {pickCards.map((c, i) => (
-          <div key={c.id} style={{ borderRadius: 10, overflow: "hidden", border: `1px solid ${T.border}`, background: T.surface }}>
+        {pickCards.map((c, i) => {
+          const isSelected = comboMode && comboSelection.includes(c.id);
+          return (
+          <div key={c.id}
+            onClick={comboMode ? () => toggleComboCard(c.id) : undefined}
+            style={{
+              borderRadius: 10, overflow: "hidden",
+              border: isSelected ? `2px solid ${T.blue}` : `1px solid ${T.border}`,
+              background: isSelected ? "#eff6ff" : T.surface,
+              cursor: comboMode ? "pointer" : "default",
+              transition: "all 0.15s",
+              transform: isSelected ? "scale(1.03)" : "scale(1)",
+              boxShadow: isSelected ? `0 0 12px ${T.blue}33` : "none",
+            }}>
             <div style={{ position: "relative" }}>
               <CardImageOrFallback card={c} hideStats={false} />
               <div style={{
                 position: "absolute", top: 4, left: 4, background: "rgba(255,255,255,0.9)", borderRadius: 99,
                 padding: "2px 8px", fontSize: 10, fontWeight: 700, color: T.accent,
               }}>Pick {i + 1}</div>
+              {isSelected && (
+                <div style={{
+                  position: "absolute", top: 4, right: 4, background: T.blue, borderRadius: 99,
+                  width: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center",
+                  color: "#fff", fontSize: 12, fontWeight: 700,
+                }}>{"\u2713"}</div>
+              )}
             </div>
             <div style={{ padding: "6px 8px" }}>
               <div style={{ fontSize: 11, fontWeight: 600, color: T.text }}>{c.name}</div>
@@ -262,8 +309,133 @@ function DraftResults({ picks, allCards, draftType, saveDraftType, username, onS
               </div>
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
+
+      {/* Combo tagging section */}
+      {!saved && (
+        <div style={{ marginBottom: 20, maxWidth: 600, margin: "0 auto 20px" }}>
+          {/* Saved combos list */}
+          {combos.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 10, color: T.textMuted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
+                Tagged Combos ({combos.length})
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {combos.map((combo, idx) => {
+                  const comboCards = combo.cardIds.map(id => pickCards.find(c => c.id === id)).filter(Boolean);
+                  return (
+                    <div key={idx} style={{
+                      padding: "8px 12px", borderRadius: 8, background: T.surface,
+                      border: `1px solid ${T.blue}33`, display: "flex", alignItems: "center", gap: 8,
+                    }}>
+                      <span style={{ fontSize: 14 }}>{"\uD83D\uDD17"}</span>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: T.text }}>
+                          {comboCards.map(c => c.name).join(" + ")}
+                        </div>
+                        {combo.comment && (
+                          <div style={{ fontSize: 11, color: T.textSecondary, fontStyle: "italic", marginTop: 2 }}>
+                            "{combo.comment}"
+                          </div>
+                        )}
+                      </div>
+                      <button onClick={() => removeCombo(idx)}
+                        style={{ background: "none", border: "none", color: T.textMuted, fontSize: 14, cursor: "pointer", padding: 4 }}>
+                        {"\u2715"}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Combo mode controls */}
+          {comboMode ? (
+            <div style={{
+              padding: "12px 16px", borderRadius: 10, background: "#eff6ff",
+              border: `1px solid ${T.blue}44`,
+            }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: T.blue, marginBottom: 8 }}>
+                {"\uD83D\uDD17"} Select 2+ cards above, then describe the combo:
+              </div>
+              <input
+                type="text"
+                value={comboComment}
+                onChange={e => setComboComment(e.target.value)}
+                placeholder="Why do these cards combo? (optional)"
+                maxLength={200}
+                style={{
+                  width: "100%", padding: "8px 12px", borderRadius: 6,
+                  border: `1px solid ${T.border}`, background: T.surface,
+                  fontSize: 12, color: T.text, outline: "none",
+                  boxSizing: "border-box", marginBottom: 8,
+                }}
+              />
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={saveCombo} disabled={comboSelection.length < 2}
+                  style={{
+                    padding: "6px 16px", borderRadius: 6, border: "none",
+                    background: comboSelection.length >= 2 ? T.blue : T.border,
+                    color: comboSelection.length >= 2 ? "#fff" : T.textMuted,
+                    fontSize: 12, fontWeight: 600,
+                    cursor: comboSelection.length >= 2 ? "pointer" : "not-allowed",
+                  }}>
+                  {"\u2713"} Save Combo ({comboSelection.length} cards)
+                </button>
+                <button onClick={() => { setComboMode(false); setComboSelection([]); setComboComment(""); }}
+                  style={{
+                    padding: "6px 16px", borderRadius: 6,
+                    border: `1px solid ${T.border}`, background: T.surface,
+                    color: T.textSecondary, fontSize: 12, cursor: "pointer",
+                  }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div style={{ textAlign: "center" }}>
+              <button onClick={() => setComboMode(true)}
+                style={{
+                  padding: "8px 20px", borderRadius: 8,
+                  border: `1px solid ${T.blue}44`, background: "#eff6ff",
+                  color: T.blue, fontSize: 12, fontWeight: 600, cursor: "pointer",
+                }}>
+                {"\uD83D\uDD17"} Tag a Card Combo
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Saved combos display (after save) */}
+      {saved && combos.length > 0 && (
+        <div style={{ marginBottom: 20, maxWidth: 600, margin: "0 auto 20px" }}>
+          <div style={{ fontSize: 10, color: T.textMuted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
+            Tagged Combos
+          </div>
+          {combos.map((combo, idx) => {
+            const comboCards = combo.cardIds.map(id => pickCards.find(c => c.id === id)).filter(Boolean);
+            return (
+              <div key={idx} style={{
+                padding: "8px 12px", borderRadius: 8, background: T.surface,
+                border: `1px solid ${T.blue}33`, marginBottom: 4,
+              }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: T.text }}>
+                  {"\uD83D\uDD17"} {comboCards.map(c => c.name).join(" + ")}
+                </span>
+                {combo.comment && (
+                  <span style={{ fontSize: 11, color: T.textSecondary, fontStyle: "italic", marginLeft: 8 }}>
+                    "{combo.comment}"
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Comment + Save */}
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
@@ -285,7 +457,7 @@ function DraftResults({ picks, allCards, draftType, saveDraftType, username, onS
 
         <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
           {!saved ? (
-            <button onClick={onSave} disabled={saving}
+            <button onClick={() => onSave(combos)} disabled={saving}
               style={{
                 padding: "10px 24px", borderRadius: 8, border: "none",
                 background: saving ? T.textMuted : T.accent, color: "#fff",
@@ -596,13 +768,13 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
     else setRound(round + 1);
   }, [packs, myPicks, pickOrder, round, maxPicks, isMini, popularityMap]);
 
-  const handleSave = useCallback(async () => {
+  const handleSave = useCallback(async (combos) => {
     if (saving) return; // prevent double-click
     setSaving(true);
     try {
       const commentEl = document.getElementById("draft-comment");
       const comment = commentEl ? commentEl.value.trim() : "";
-      const result = await saveDraft(username, saveDraftType, myPicks, pickOrder, comment);
+      const result = await saveDraft(username, saveDraftType, myPicks, pickOrder, comment, combos || []);
       setSaved(true);
       setSaveResult(result);
     } catch (err) {

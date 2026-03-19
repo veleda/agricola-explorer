@@ -263,6 +263,8 @@ def _get_db() -> sqlite3.Connection:
         for row in conn.execute("SELECT id, picks FROM drafts").fetchall():
             h = _picks_hash(json.loads(row[1]))
             conn.execute("UPDATE drafts SET picksHash = ? WHERE id = ?", (h, row[0]))
+    if "combos" not in cols:
+        conn.execute("ALTER TABLE drafts ADD COLUMN combos TEXT DEFAULT '[]'")
     conn.commit()
     return conn
 
@@ -276,7 +278,12 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     d["picks"] = json.loads(d["picks"])
     d["pickOrder"] = json.loads(d["pickOrder"])
     d["comment"] = d.get("comment") or ""
+    d["combos"] = json.loads(d.get("combos") or "[]")
     return d
+
+class ComboTag(BaseModel):
+    cardIds: list[str]         # 2+ card IDs that form the combo
+    comment: str = ""          # player's note about why these combo
 
 class DraftSaveRequest(BaseModel):
     username: str
@@ -284,6 +291,7 @@ class DraftSaveRequest(BaseModel):
     picks: list[str]           # card IDs in pick order
     pickOrder: list[int]       # round number for each pick
     comment: str = ""          # optional player note
+    combos: list[ComboTag] = []  # tagged card combos
 
 _VALID_DRAFT_TYPES = {"Occupation", "MinorImprovement", "MiniOccupation", "MiniMinorImprovement"}
 _PICK_COUNTS = {"Occupation": 7, "MinorImprovement": 7, "MiniOccupation": 5, "MiniMinorImprovement": 5}
@@ -326,11 +334,14 @@ def save_draft(req: DraftSaveRequest):
             "twinUsers": [{"id": r[0], "username": r[1], "timestamp": r[2]} for r in twin_rows],
         })
 
+    # Serialize combos: list of {cardIds, comment}
+    combos_json = json.dumps([{"cardIds": c.cardIds, "comment": (c.comment or "").strip()[:200]} for c in (req.combos or [])])
+
     conn.execute(
-        "INSERT INTO drafts (id, username, draftType, picks, pickOrder, timestamp, comment, picksHash) VALUES (?,?,?,?,?,?,?,?)",
+        "INSERT INTO drafts (id, username, draftType, picks, pickOrder, timestamp, comment, picksHash, combos) VALUES (?,?,?,?,?,?,?,?,?)",
         (draft_id, req.username.strip(), req.draftType,
          json.dumps(req.picks), json.dumps(req.pickOrder), ts,
-         (req.comment or "").strip()[:500], ph),
+         (req.comment or "").strip()[:500], ph, combos_json),
     )
     conn.commit()
 
@@ -350,6 +361,7 @@ def save_draft(req: DraftSaveRequest):
         "pickOrder": req.pickOrder, "timestamp": ts,
         "comment": (req.comment or "").strip()[:500],
         "picksHash": ph,
+        "combos": [{"cardIds": c.cardIds, "comment": (c.comment or "").strip()[:200]} for c in (req.combos or [])],
     }
     return {
         "ok": True, "draft": entry,

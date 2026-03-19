@@ -354,6 +354,38 @@ function HandRow({ hand, cardMap, isExpanded, onToggle, onShowTwins }) {
               </div>
             ))}
           </div>
+
+          {/* Combos */}
+          {hand.combos && hand.combos.length > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 10, color: T.textMuted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6, textAlign: "center" }}>
+                Tagged Combos
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {hand.combos.map((combo, idx) => {
+                  const comboCards = (combo.cardIds || []).map(id => cardMap[id]).filter(Boolean);
+                  return (
+                    <div key={idx} style={{
+                      padding: "6px 10px", borderRadius: 6, background: T.surface,
+                      border: `1px solid ${T.blue}22`, display: "flex", alignItems: "center", gap: 6,
+                    }}>
+                      <span style={{ fontSize: 12 }}>{"\uD83D\uDD17"}</span>
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: T.text }}>
+                          {comboCards.map(c => c.name).join(" + ")}
+                        </div>
+                        {combo.comment && (
+                          <div style={{ fontSize: 10, color: T.textSecondary, fontStyle: "italic" }}>
+                            "{combo.comment}"
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
