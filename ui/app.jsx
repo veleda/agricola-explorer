@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import * as d3 from "d3";
 import Drafter from "./drafter.jsx";
 import CommunityHands from "./hands.jsx";
+import ScoreSheet from "./scoresheet.jsx";
 
 // ── API helpers ─────────────────────────────────────────────────────────────
 const API_BASE = "";  // same origin in production; Vite proxy in dev
@@ -726,7 +727,7 @@ export default function App() {
   // Auto-collapse sidebar when entering drafter/hands, expand when returning to explorer
   const setAppModeWithSidebar = useCallback((mode, opts) => {
     setAppMode(mode);
-    setSidebarCollapsed(mode === "drafter" || mode === "hands");
+    setSidebarCollapsed(mode === "drafter" || mode === "hands" || mode === "score");
     if (opts?.draftType) setHandsDraftType(opts.draftType);
   }, []);
 
@@ -933,6 +934,7 @@ export default function App() {
               { mode: "explorer", emoji: "\uD83D\uDDFA\uFE0F", label: "Explorer", desc: `${activeCards.length} cards` },
               { mode: "drafter", emoji: "\uD83C\uDCCF", label: "Drafter", desc: "Draft vs 3 NPCs" },
               { mode: "hands", emoji: "\uD83E\uDD1D", label: "Community Hands", desc: "Browse & search" },
+              { mode: "score", emoji: "\uD83D\uDCCB", label: "Score Sheet", desc: "Calculate your score" },
             ].map(({ mode, emoji, label, desc }) => {
               const isActive = appMode === mode;
               return (
@@ -1084,6 +1086,7 @@ export default function App() {
       { mode: "explorer", emoji: "\uD83D\uDDFA\uFE0F", label: "Explore" },
       { mode: "drafter", emoji: "\uD83C\uDCCF", label: "Draft" },
       { mode: "hands", emoji: "\uD83E\uDD1D", label: "Hands" },
+      { mode: "score", emoji: "\uD83D\uDCCB", label: "Score" },
     ];
     const mobileModeSwitcher = (
       <div style={{ display: "flex", gap: 3, background: E.surface, borderRadius: 8, padding: 2, border: `1px solid ${E.border}` }}>
@@ -1106,10 +1109,10 @@ export default function App() {
       </div>
     );
 
-    if (appMode === "drafter" || appMode === "hands") {
+    if (appMode === "drafter" || appMode === "hands" || appMode === "score") {
       return (
         <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: E.bg, color: E.textSecondary, fontFamily: "Inter, system-ui, sans-serif" }}>
-          {/* Mobile drafter/hands header */}
+          {/* Mobile drafter/hands/score header */}
           <div style={{
             display: "flex", alignItems: "center", padding: "10px 12px",
             borderBottom: `1px solid ${E.border}`, gap: 8, flexShrink: 0,
@@ -1119,7 +1122,9 @@ export default function App() {
           <div style={{ flex: 1, overflow: "hidden" }}>
             {appMode === "drafter"
               ? <Drafter allCards={activeCards} norwayOnly={norwayOnly} setNorwayOnly={setNorwayOnly} onViewHands={(dt) => setAppModeWithSidebar("hands", { draftType: dt })} />
-              : <CommunityHands allCards={allCards} initialDraftType={handsDraftType} />
+              : appMode === "hands"
+              ? <CommunityHands allCards={allCards} initialDraftType={handsDraftType} />
+              : <ScoreSheet />
             }
           </div>
         </div>
@@ -1280,7 +1285,7 @@ export default function App() {
         ) : (
           <>
             {filterContent}
-            {(appMode === "drafter" || appMode === "hands") && (
+            {(appMode === "drafter" || appMode === "hands" || appMode === "score") && (
               <button onClick={() => setSidebarCollapsed(true)}
                 style={{
                   background: "none", border: "none", borderTop: `1px solid ${E.border}`,
@@ -1300,6 +1305,10 @@ export default function App() {
       ) : appMode === "hands" ? (
         <div style={{ flex: 1, overflow: "hidden" }}>
           <CommunityHands allCards={allCards} initialDraftType={handsDraftType} />
+        </div>
+      ) : appMode === "score" ? (
+        <div style={{ flex: 1, overflow: "hidden" }}>
+          <ScoreSheet />
         </div>
       ) : (
       <>

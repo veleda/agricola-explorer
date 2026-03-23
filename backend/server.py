@@ -11,6 +11,8 @@ Endpoints:
   GET  /api/hands              → search community hands by card name / player nick
   GET  /api/hands/twins/{hash} → find hands with identical card selections
   GET  /api/hands/popular      → most popular cards across community hands
+  POST /api/scores             → save a game score sheet
+  GET  /api/scores             → search scores by player name or tournament
   GET  /                       → serve the built React frontend (index.html)
 """
 
@@ -265,6 +267,20 @@ def _get_db() -> sqlite3.Connection:
             conn.execute("UPDATE drafts SET picksHash = ? WHERE id = ?", (h, row[0]))
     if "combos" not in cols:
         conn.execute("ALTER TABLE drafts ADD COLUMN combos TEXT DEFAULT '[]'")
+    # ── Scores table ──────────────────────────────────────────────────────────
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS scores (
+            id           TEXT PRIMARY KEY,
+            name         TEXT NOT NULL,
+            tournament   TEXT,
+            tableNumber  TEXT,
+            gameNumber   TEXT,
+            valuesJson   TEXT NOT NULL,
+            pointsJson   TEXT NOT NULL,
+            total        INTEGER NOT NULL,
+            timestamp    TEXT NOT NULL
+        )
+    """)
     conn.commit()
     return conn
 
@@ -543,6 +559,73 @@ def popular_cards(draftType: Optional[str] = None, limit: int = 15):
         ],
         "totalHands": total_hands,
     }
+
+
+# ── Score Sheet endpoints ─────────────────────────────────────────────────────
+
+class ScoreSaveRequest(BaseModel):
+    name: str
+    tournament: Optional[str] = None
+    tableNumber: Optional[str] = None
+    gameNumber: Optional[str] = None
+    values: dict          # {fields: 3, pastures: 1, ...}
+    points: dict          # {fields: 2, pastures: 1, ...}
+    total: int
+
+@app.post("/api/scores")
+def save_score(req: ScoreSaveRequest):
+    if not req.name.strip():
+        return JSONResponse(status_code=400, content={"error": "name required"})
+
+    score_id = hashlib.md5(f"{req.name}{time.time()}".encode()).hexdigest()[:12]
+    ts = datetime.datetime.utcnow().isoformat() + "Z"
+
+    conn = _get_db()
+    conn.execute(
+        "INSERT INTO scores (id, name, tournament, tableNumber, gameNumber, valuesJson, pointsJson, total, timestamp) VALUES (?,?,?,?,?,?,?,?,?)",
+        (score_id, req.name.strip(),
+         (req.tournament or "").strip() or None,
+         (req.tableNumber or "").strip() or None,
+         (req.gameNumber or "").strip() or None,
+         json.dumps(req.values), json.dumps(req.points),
+         req.total, ts),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "id": score_id}
+
+
+@app.get("/api/scores")
+def list_scores(q: str = "", page: int = 1, pageSize: int = 20):
+    conn = _get_db()
+    offset = (max(page, 1) - 1) * pageSize
+
+    if q.strip():
+        like = f"%{q.strip()}%"
+        total = conn.execute(
+            "SELECT COUNT(*) FROM scores WHERE name LIKE ? OR tournament LIKE ?",
+            (like, like)
+        ).fetchone()[0]
+        rows = conn.execute(
+            "SELECT * FROM scores WHERE name LIKE ? OR tournament LIKE ? ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+            (like, like, pageSize, offset)
+        ).fetchall()
+    else:
+        total = conn.execute("SELECT COUNT(*) FROM scores").fetchone()[0]
+        rows = conn.execute(
+            "SELECT * FROM scores ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+            (pageSize, offset)
+        ).fetchall()
+
+    scores = []
+    for row in rows:
+        d = dict(row)
+        d["values"] = json.loads(d.pop("valuesJson"))
+        d["points"] = json.loads(d.pop("pointsJson"))
+        scores.append(d)
+
+    conn.close()
+    return {"scores": scores, "total": total, "page": page, "pageSize": pageSize}
 
 
 # ── Image proxy (avoids mixed-content blocking) ─────────────────────────────
