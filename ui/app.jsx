@@ -740,7 +740,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
 
   // Norway Deck toggle
-  const [norwayOnly, setNorwayOnly] = useState(false);
+  const [norwayOnly, setNorwayOnly] = useState(true);
   const activeCards = useMemo(() => {
     if (!norwayOnly) return allCards;
     const noCards = allCards.filter(c => c.isNo);

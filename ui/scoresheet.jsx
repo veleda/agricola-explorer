@@ -71,13 +71,14 @@ const CATEGORIES = [
   { key: "familyMembers",   label: "Family members",    group: "family",   type: "fixed", rate: 3,  icon: "👤", hint: "+3 each · starts at 2" },
   { key: "pointsForCards",  label: "Points for cards",  group: "cards",    type: "direct", icon: "🃏", hint: "Victory points on cards" },
   { key: "bonusPoints",     label: "Bonus points",      group: "cards",    type: "direct", icon: "⭐", hint: "Bonus point cards" },
+  { key: "beggingCards",    label: "Begging cards",      group: "penalty",  type: "fixed", rate: -3, icon: "🪹", hint: "−3 per begging card" },
 ];
 
 const GROUP_LABELS = {
   land: "Land", crops: "Crops", animals: "Animals",
-  farmyard: "Farmyard", housing: "Housing", family: "Family", cards: "Cards",
+  farmyard: "Farmyard", housing: "Housing", family: "Family", cards: "Cards", penalty: "Penalty",
 };
-const GROUP_ORDER = ["land", "crops", "animals", "farmyard", "housing", "family", "cards"];
+const GROUP_ORDER = ["land", "crops", "animals", "farmyard", "housing", "family", "cards", "penalty"];
 
 // Scoring reference table: [label, -1pt, 1pt, 2pt, 3pt, 4pt]
 const SCORING_REF = [
