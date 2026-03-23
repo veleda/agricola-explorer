@@ -641,33 +641,56 @@ export default function ScoreSheet() {
             }}>
               {items.map((cat, i) => (
                 <div key={cat.key} style={{
-                  padding: isMobile ? "10px 12px" : "10px 16px",
+                  padding: isMobile ? "8px 10px" : "10px 16px",
                   borderTop: i > 0 ? `1px solid ${T.borderLight}` : "none",
                 }}>
                   {isMobile ? (
-                    /* ── Mobile: stacked layout with stepper buttons ── */
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <span style={{ fontSize: 18, flexShrink: 0 }}>{cat.icon}</span>
-                          <div>
-                            <div style={{ fontSize: 14, fontWeight: 700, color: T.text }}>{cat.label}</div>
-                            <div style={{ fontSize: 10, color: T.textMuted }}>{cat.hint}</div>
+                    /* ── Mobile: image | label + stepper | tall score badge ── */
+                    <div style={{ display: "flex", alignItems: "stretch", gap: 10 }}>
+                      {/* Left: large emoji as placeholder image */}
+                      <div style={{
+                        width: 56, flexShrink: 0,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        fontSize: 36, lineHeight: 1,
+                        background: T.surfaceAlt, borderRadius: 10,
+                      }}>
+                        {cat.image
+                          ? <img src={cat.image} alt={cat.label} style={{ width: 48, height: 48, objectFit: "contain", borderRadius: 6 }} />
+                          : cat.icon}
+                      </div>
+                      {/* Centre: label + stepper row */}
+                      <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 4 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: T.text, lineHeight: 1.1 }}>{cat.label}</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <StepperBtn direction="minus" onClick={() => stepValue(cat.key, -1)} />
+                          <div style={{
+                            minWidth: 36, textAlign: "center",
+                            fontSize: 24, fontWeight: 800, color: T.text, lineHeight: 1,
+                          }}>
+                            {values[cat.key] ?? 0}
                           </div>
+                          <StepperBtn direction="plus" onClick={() => stepValue(cat.key, 1)} />
                         </div>
-                        <PointsBadge pts={points[cat.key]} />
                       </div>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12 }}>
-                        <StepperBtn direction="minus" onClick={() => stepValue(cat.key, -1)} />
-                        <div style={{
-                          minWidth: 48, textAlign: "center",
-                          fontSize: 22, fontWeight: 800, color: T.text,
-                          lineHeight: 1,
-                        }}>
-                          {values[cat.key] ?? 0}
-                        </div>
-                        <StepperBtn direction="plus" onClick={() => stepValue(cat.key, 1)} />
-                      </div>
+                      {/* Right: tall score badge filling the row */}
+                      {(() => {
+                        const pts = points[cat.key];
+                        const isNeg = pts !== null && pts < 0;
+                        const isZero = pts === 0;
+                        const isNull = pts === null;
+                        return (
+                          <div style={{
+                            width: 48, flexShrink: 0,
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                            borderRadius: 10, fontWeight: 800,
+                            fontSize: isNull ? 16 : 20,
+                            background: isNull ? T.surfaceAlt : isNeg ? "#fef2f2" : isZero ? T.surfaceAlt : T.greenLight,
+                            color: isNull ? T.textMuted : isNeg ? T.red : isZero ? T.textMuted : T.green,
+                          }}>
+                            {isNull ? "—" : pts > 0 ? `+${pts}` : pts}
+                          </div>
+                        );
+                      })()}
                     </div>
                   ) : (
                     /* ── Desktop: inline layout with number input ── */
