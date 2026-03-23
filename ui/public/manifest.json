@@ -1,6 +1,6 @@
 {
   "name": "Agricola Explorer",
-  "short_name": "Agricola",
+  "short_name": "Agricola Explorer",
   "description": "Browse, draft, and score Agricola cards",
   "start_url": "/",
   "display": "standalone",
