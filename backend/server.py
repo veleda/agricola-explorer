@@ -309,8 +309,8 @@ class DraftSaveRequest(BaseModel):
     comment: str = ""          # optional player note
     combos: list[ComboTag] = []  # tagged card combos
 
-_VALID_DRAFT_TYPES = {"Occupation", "MinorImprovement", "MiniOccupation", "MiniMinorImprovement"}
-_PICK_COUNTS = {"Occupation": 7, "MinorImprovement": 7, "MiniOccupation": 5, "MiniMinorImprovement": 5}
+_VALID_DRAFT_TYPES = {"Occupation", "MinorImprovement", "MiniOccupation", "MiniMinorImprovement", "FullCombo", "MiniCombo"}
+_PICK_COUNTS = {"Occupation": 7, "MinorImprovement": 7, "MiniOccupation": 5, "MiniMinorImprovement": 5, "FullCombo": 14, "MiniCombo": 10}
 
 @app.post("/api/drafts")
 def save_draft(req: DraftSaveRequest):

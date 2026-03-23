@@ -6,9 +6,12 @@ const NUM_PLAYERS = 4;
 
 // Draft mode configs
 const MODES = {
-  full: { maxPicks: 7, packSize: 9, label: "Full Drafter", desc: "Draft 7 cards from packs of 9" },
-  mini: { maxPicks: 5, packSize: 9, label: "Mini Drafter", desc: "Pick 5 from a fixed deck of 9" },
+  full:      { maxPicks: 7, packSize: 9, label: "All Cards Draft",      desc: "Draft 7 cards from packs of 9" },
+  mini:      { maxPicks: 5, packSize: 9, label: "Mini Draft",           desc: "Pick 5 from a fixed deck of 9" },
+  fullCombo: { maxPicks: 7, packSize: 9, label: "All Cards Full Draft", desc: "Draft 7+7 cards: occupations then minor improvements" },
+  miniCombo: { maxPicks: 5, packSize: 9, label: "Mini Full Draft",      desc: "Pick 5+5 cards: occupations then minor improvements" },
 };
+const COMBO_MODES = new Set(["fullCombo", "miniCombo"]);
 const MINI_NUM_DECKS = 100;
 
 // ── Light theme palette ─────────────────────────────────────────────────────
@@ -195,8 +198,12 @@ function DraftCard({ card, onPick, disabled, hideStats, pickPopularity }) {
 }
 
 // ── Draft results screen ────────────────────────────────────────────────────
-function DraftResults({ picks, allCards, draftType, saveDraftType, username, onSave, onNewDraft, saved, saving, isMini, saveResult, onViewHands }) {
-  const pickCards = picks.map(id => allCards.find(c => c.id === id)).filter(Boolean);
+function DraftResults({ picks, allCards, draftType, saveDraftType, username, onSave, onNewDraft, saved, saving, isMini, saveResult, onViewHands, occPicks, minorPicks, isCombo }) {
+  // For combo drafts, show the full combined hand; for single, just picks
+  const allPickIds = isCombo ? [...(occPicks || []), ...(minorPicks || [])] : picks;
+  const pickCards = allPickIds.map(id => allCards.find(c => c.id === id)).filter(Boolean);
+  const occPickCards = isCombo ? (occPicks || []).map(id => allCards.find(c => c.id === id)).filter(Boolean) : [];
+  const minorPickCards = isCombo ? (minorPicks || []).map(id => allCards.find(c => c.id === id)).filter(Boolean) : [];
 
   // Combo tagging state
   const [combos, setCombos] = useState([]);        // saved combos: [{cardIds: [...], comment: ""}]
@@ -227,14 +234,14 @@ function DraftResults({ picks, allCards, draftType, saveDraftType, username, onS
   const avgAdp = adpCards.length > 0 ? adpCards.reduce((s, c) => s + c.adp, 0) / adpCards.length : 0;
   const totalCostItems = pickCards.reduce((s, c) => s + (c.costLabel ? c.costLabel.split(/\s+/).length : 0), 0);
   const baseName = draftType === "Occupation" ? "Occupations" : "Minor Improvements";
-  const typeName = isMini ? `Mini ${baseName}` : baseName;
+  const typeName = isCombo ? (isMini ? "Mini Full Draft" : "All Cards Full Draft") : (isMini ? `Mini ${baseName}` : baseName);
 
   return (
     <div style={{ padding: 24, maxWidth: 900, margin: "0 auto" }}>
       <div style={{ textAlign: "center", marginBottom: 24 }}>
         <div style={{ fontSize: 28, fontWeight: 700, color: T.accent, marginBottom: 4 }}>Draft Complete!</div>
         <div style={{ fontSize: 14, color: T.textSecondary }}>
-          Your {typeName} hand
+          Your {typeName} hand — {pickCards.length} cards
           {isMini && <span style={{ marginLeft: 6, fontSize: 11, padding: "2px 8px", borderRadius: 99, background: "#fef2f2", color: T.red }}>{"\uD83C\uDDF3\uD83C\uDDF4"} Mini</span>}
         </div>
       </div>
@@ -265,38 +272,56 @@ function DraftResults({ picks, allCards, draftType, saveDraftType, username, onS
           {"\uD83D\uDD17"} Click cards to select them for a combo ({comboSelection.length} selected)
         </div>
       )}
-      <div style={{
-        display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
-        gap: 12, marginBottom: 24,
-      }}>
-        {pickCards.map((c, i) => {
-          const isSelected = comboMode && comboSelection.includes(c.id);
-          return (
-          <div key={c.id}
-            onClick={comboMode ? () => toggleComboCard(c.id) : undefined}
-            style={{
-              borderRadius: 10, overflow: "hidden",
-              border: isSelected ? `2px solid ${T.blue}` : `1px solid ${T.border}`,
-              background: isSelected ? "#eff6ff" : T.surface,
-              cursor: comboMode ? "pointer" : "default",
-              transition: "all 0.15s",
-              transform: isSelected ? "scale(1.03)" : "scale(1)",
-              boxShadow: isSelected ? `0 0 12px ${T.blue}33` : "none",
+      {/* Render helper for a card section */}
+      {(isCombo ? [
+        { label: "\uD83D\uDC64 Occupations", cards: occPickCards },
+        { label: "\uD83D\uDD27 Minor Improvements", cards: minorPickCards },
+      ] : [
+        { label: null, cards: pickCards },
+      ]).map(({ label: sectionLabel, cards: sectionCards }, si) => (
+        <div key={si}>
+          {sectionLabel && (
+            <div style={{
+              fontSize: 12, fontWeight: 700, color: T.accent, textTransform: "uppercase",
+              letterSpacing: 0.5, marginBottom: 8, marginTop: si > 0 ? 20 : 0,
+              paddingBottom: 4, borderBottom: `1px solid ${T.border}`,
             }}>
-            <div style={{ position: "relative" }}>
-              <CardImageOrFallback card={c} hideStats={false} />
-              <div style={{
-                position: "absolute", top: 4, left: 4, background: "rgba(255,255,255,0.9)", borderRadius: 99,
-                padding: "2px 8px", fontSize: 10, fontWeight: 700, color: T.accent,
-              }}>Pick {i + 1}</div>
-              {isSelected && (
-                <div style={{
-                  position: "absolute", top: 4, right: 4, background: T.blue, borderRadius: 99,
-                  width: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center",
-                  color: "#fff", fontSize: 12, fontWeight: 700,
-                }}>{"\u2713"}</div>
-              )}
+              {sectionLabel}
             </div>
+          )}
+          <div style={{
+            display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
+            gap: 12, marginBottom: si === 0 && isCombo ? 0 : 24,
+          }}>
+            {sectionCards.map((c, i) => {
+              const globalIdx = isCombo && si === 1 ? occPickCards.length + i : i;
+              const isSelected = comboMode && comboSelection.includes(c.id);
+              return (
+              <div key={c.id}
+                onClick={comboMode ? () => toggleComboCard(c.id) : undefined}
+                style={{
+                  borderRadius: 10, overflow: "hidden",
+                  border: isSelected ? `2px solid ${T.blue}` : `1px solid ${T.border}`,
+                  background: isSelected ? "#eff6ff" : T.surface,
+                  cursor: comboMode ? "pointer" : "default",
+                  transition: "all 0.15s",
+                  transform: isSelected ? "scale(1.03)" : "scale(1)",
+                  boxShadow: isSelected ? `0 0 12px ${T.blue}33` : "none",
+                }}>
+                <div style={{ position: "relative" }}>
+                  <CardImageOrFallback card={c} hideStats={false} />
+                  <div style={{
+                    position: "absolute", top: 4, left: 4, background: "rgba(255,255,255,0.9)", borderRadius: 99,
+                    padding: "2px 8px", fontSize: 10, fontWeight: 700, color: T.accent,
+                  }}>Pick {i + 1}</div>
+                  {isSelected && (
+                    <div style={{
+                      position: "absolute", top: 4, right: 4, background: T.blue, borderRadius: 99,
+                      width: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center",
+                      color: "#fff", fontSize: 12, fontWeight: 700,
+                    }}>{"\u2713"}</div>
+                  )}
+                </div>
             <div style={{ padding: "6px 8px" }}>
               <div style={{ fontSize: 11, fontWeight: 600, color: T.text }}>{c.name}</div>
               <div style={{ fontSize: 10, color: T.textMuted }}>
@@ -311,7 +336,9 @@ function DraftResults({ picks, allCards, draftType, saveDraftType, username, onS
           </div>
           );
         })}
-      </div>
+          </div>
+        </div>
+      ))}
 
       {/* Combo tagging section */}
       {!saved && (
@@ -610,7 +637,7 @@ function CommunityStats({ allCards, draftType }) {
 
 // ── Main Drafter Component ──────────────────────────────────────────────────
 export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHands }) {
-  const [drafterMode, setDrafterMode] = useState(null); // null = mode picker, "full" | "mini"
+  const [drafterMode, setDrafterMode] = useState(null); // null | "full" | "mini" | "fullCombo" | "miniCombo"
   const [phase, setPhase] = useState("setup");
   const [draftType, setDraftType] = useState("Occupation");
   const [username, setUsername] = useState("");
@@ -623,26 +650,36 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
   const [round, setRound] = useState(1);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [saveResult, setSaveResult] = useState(null); // response from save including twin info
-  const [lastPickPopularity, setLastPickPopularity] = useState({}); // cardId -> % who drafted it
+  const [saveResult, setSaveResult] = useState(null);
+  const [lastPickPopularity, setLastPickPopularity] = useState({});
 
   const [showCommunity, setShowCommunity] = useState(false);
   const [showDraftHand, setShowDraftHand] = useState(false);
 
+  // ── Combo draft state (fullCombo / miniCombo) ──────────────────────────
+  // comboPhase: 1 = drafting occupations, 2 = drafting minor improvements
+  const [comboPhase, setComboPhase] = useState(1);
+  const [occPicks, setOccPicks] = useState([]);         // occupation picks from phase 1
+  const [occPickOrder, setOccPickOrder] = useState([]);  // pick order from phase 1
+
   // Community stats for popularity display in mini mode
   const [miniCommunityStats, setMiniCommunityStats] = useState(null);
 
-  const isMini = drafterMode === "mini";
+  const isCombo = COMBO_MODES.has(drafterMode);
+  const isMini = drafterMode === "mini" || drafterMode === "miniCombo";
+  const baseDrafterMode = drafterMode === "fullCombo" ? "full" : drafterMode === "miniCombo" ? "mini" : drafterMode;
   const modeConfig = MODES[drafterMode] || MODES.full;
   const maxPicks = modeConfig.maxPicks;
   const packSize = modeConfig.packSize;
+  // In combo mode, the active draft type follows the phase
+  const activeDraftType = isCombo ? (comboPhase === 1 ? "Occupation" : "MinorImprovement") : draftType;
 
   // Fetch community stats for mini mode (to show pick popularity)
   useEffect(() => {
     if (!isMini) return;
-    const dt = draftType === "Occupation" ? "MiniOccupation" : "MiniMinorImprovement";
+    const dt = activeDraftType === "Occupation" ? "MiniOccupation" : "MiniMinorImprovement";
     fetchDraftStats(dt).then(s => setMiniCommunityStats(s)).catch(() => {});
-  }, [isMini, draftType]);
+  }, [isMini, activeDraftType]);
 
   // Build popularity map: cardId -> percentage of drafts that included this card
   const popularityMap = useMemo(() => {
@@ -657,11 +694,11 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
   const availableDecks = useMemo(() => {
     if (isMini) return [];
     const typeCards = allCards.filter(c =>
-      draftType === "Occupation" ? c.type === "Occupation" : c.type === "MinorImprovement"
+      activeDraftType === "Occupation" ? c.type === "Occupation" : c.type === "MinorImprovement"
     );
     const deckSet = new Set(typeCards.map(c => c.deck).filter(Boolean));
     return [...deckSet].sort();
-  }, [allCards, draftType, isMini]);
+  }, [allCards, activeDraftType, isMini]);
 
   useEffect(() => {
     if (!isMini) {
@@ -686,7 +723,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
   // For Mini Drafter: get 4 fixed decks (deck N, N+1, N+2, N+3 mod 100) for 4-player draft
   const miniPacks = useMemo(() => {
     if (!isMini) return [[], [], [], []];
-    const source = draftType === "Occupation" ? miniDecks.occ : miniDecks.minor;
+    const source = activeDraftType === "Occupation" ? miniDecks.occ : miniDecks.minor;
     const result = [];
     for (let p = 0; p < NUM_PLAYERS; p++) {
       const idx = (miniDeckNumber - 1 + p) % source.length;
@@ -695,7 +732,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
       result.push(allCards.filter(c => idSet.has(String(c.id))));
     }
     return result;
-  }, [isMini, miniDeckNumber, draftType, allCards]);
+  }, [isMini, miniDeckNumber, activeDraftType, allCards]);
 
   // miniDeckCards = your pack (pack 0) for display purposes
   const miniDeckCards = miniPacks[0];
@@ -704,39 +741,47 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
     if (isMini) return miniDeckCards;
     const decks = selectedDecks || availableDecks;
     return allCards.filter(c => {
-      if (draftType === "Occupation" ? c.type !== "Occupation" : c.type !== "MinorImprovement") return false;
+      if (activeDraftType === "Occupation" ? c.type !== "Occupation" : c.type !== "MinorImprovement") return false;
       return decks.includes(c.deck);
     });
-  }, [isMini, miniDeckCards, allCards, draftType, selectedDecks, availableDecks]);
+  }, [isMini, miniDeckCards, allCards, activeDraftType, selectedDecks, availableDecks]);
 
   const canStart = isMini
     ? (username.trim() && miniDeckCards.length === 9)
     : (username.trim() && (selectedDecks || []).length > 0 && draftableCards.length >= packSize * NUM_PLAYERS);
 
-  const saveDraftType = isMini
-    ? (draftType === "Occupation" ? "MiniOccupation" : "MiniMinorImprovement")
-    : draftType;
+  const saveDraftType = isCombo
+    ? (isMini ? "MiniCombo" : "FullCombo")
+    : isMini
+    ? (activeDraftType === "Occupation" ? "MiniOccupation" : "MiniMinorImprovement")
+    : activeDraftType;
 
-  const startDraft = useCallback(() => {
-    if (!canStart) return;
-    if (isMini) {
-      // Mini: 4-player draft using 4 consecutive fixed decks
+  const initPacks = useCallback((cardPool, useMiniPacks) => {
+    if (useMiniPacks) {
       setPacks(miniPacks.map(p => [...p]));
     } else {
-      const pool = shuffle(draftableCards);
+      const pool = shuffle(cardPool);
       const newPacks = [];
       for (let p = 0; p < NUM_PLAYERS; p++) {
         newPacks.push(pool.splice(0, packSize));
       }
       setPacks(newPacks);
     }
+  }, [miniPacks, packSize]);
+
+  const startDraft = useCallback(() => {
+    if (!canStart) return;
+    if (isCombo) setComboPhase(1);
+    setOccPicks([]);
+    setOccPickOrder([]);
+    initPacks(draftableCards, isMini);
     setMyPicks([]);
     setPickOrder([]);
     setRound(1);
     setSaved(false);
     setLastPickPopularity({});
     setPhase("drafting");
-  }, [canStart, isMini, miniPacks, draftableCards, packSize]);
+  }, [canStart, isMini, isCombo, draftableCards, initPacks]);
 
   const handlePick = useCallback((card) => {
     const currentPack = packs[0];
@@ -764,25 +809,71 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
 
     setMyPicks(newPicks);
     setPickOrder(newPickOrder);
-    if (newPicks.length >= maxPicks) setPhase("results");
-    else setRound(round + 1);
-  }, [packs, myPicks, pickOrder, round, maxPicks, isMini, popularityMap]);
+    if (newPicks.length >= maxPicks) {
+      if (isCombo && comboPhase === 1) {
+        // Phase 1 done (occupations). Save picks and transition to minor improvements.
+        setOccPicks(newPicks);
+        setOccPickOrder(newPickOrder);
+        setComboPhase(2);
+        setMyPicks([]);
+        setPickOrder([]);
+        setRound(1);
+        setLastPickPopularity({});
+        // Build new packs for minor improvements
+        if (isMini) {
+          // For mini combo: use same deck number but from minor decks
+          const source = miniDecks.minor;
+          const result = [];
+          for (let p = 0; p < NUM_PLAYERS; p++) {
+            const idx = (miniDeckNumber - 1 + p) % source.length;
+            const deckIds = source[idx] || [];
+            const idSet = new Set(deckIds);
+            result.push(allCards.filter(c => idSet.has(String(c.id))));
+          }
+          setPacks(result);
+        } else {
+          // For full combo: build new packs from minor improvement pool
+          const decks = selectedDecks || availableDecks;
+          const minorPool = shuffle(allCards.filter(c => c.type === "MinorImprovement" && decks.includes(c.deck)));
+          const newMinorPacks = [];
+          for (let p = 0; p < NUM_PLAYERS; p++) {
+            newMinorPacks.push(minorPool.splice(0, packSize));
+          }
+          setPacks(newMinorPacks);
+        }
+        // Phase stays "drafting"
+      } else {
+        setPhase("results");
+      }
+    } else {
+      setRound(round + 1);
+    }
+  }, [packs, myPicks, pickOrder, round, maxPicks, isMini, isCombo, comboPhase, popularityMap, miniDeckNumber, allCards, selectedDecks, availableDecks, packSize]);
 
   const handleSave = useCallback(async (combos) => {
-    if (saving) return; // prevent double-click
+    if (saving) return;
     setSaving(true);
     try {
       const commentEl = document.getElementById("draft-comment");
       const comment = commentEl ? commentEl.value.trim() : "";
-      const result = await saveDraft(username, saveDraftType, myPicks, pickOrder, comment, combos || []);
-      setSaved(true);
-      setSaveResult(result);
+      if (isCombo) {
+        // Save combined hand: all picks together
+        const allPicks = [...occPicks, ...myPicks];
+        const allPickOrder = [...occPickOrder, ...pickOrder.map(r => r + occPickOrder.length)];
+        const result = await saveDraft(username, saveDraftType, allPicks, allPickOrder, comment, combos || []);
+        setSaved(true);
+        setSaveResult(result);
+      } else {
+        const result = await saveDraft(username, saveDraftType, myPicks, pickOrder, comment, combos || []);
+        setSaved(true);
+        setSaveResult(result);
+      }
     } catch (err) {
       console.error("Failed to save draft:", err);
     } finally {
       setSaving(false);
     }
-  }, [username, saveDraftType, myPicks, pickOrder, saving]);
+  }, [username, saveDraftType, myPicks, pickOrder, saving, isCombo, occPicks, occPickOrder]);
 
   const resetDraft = useCallback(() => {
     setPhase("setup");
@@ -794,6 +885,9 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
     setSaveResult(null);
     setShowCommunity(false);
     setLastPickPopularity({});
+    setComboPhase(1);
+    setOccPicks([]);
+    setOccPickOrder([]);
   }, []);
 
   const resetToModePicker = useCallback(() => {
@@ -812,48 +906,29 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
               <div style={{ fontSize: 15, color: T.textSecondary }}>Choose your draft format</div>
             </div>
 
-            <div style={{ display: "flex", gap: 16, justifyContent: "center", flexWrap: "wrap" }}>
-              {/* Full Drafter card */}
-              <button onClick={() => setDrafterMode("full")}
-                style={{
-                  flex: "1 1 220px", maxWidth: 240, padding: "28px 20px", borderRadius: 14,
-                  border: `2px solid ${T.border}`, background: T.surface, cursor: "pointer",
-                  textAlign: "center", transition: "all 0.2s",
-                  display: "flex", flexDirection: "column", alignItems: "center", gap: 10,
-                }}
-                onMouseEnter={e => { e.currentTarget.style.borderColor = T.accent; e.currentTarget.style.boxShadow = "0 4px 20px rgba(0,0,0,0.08)"; }}
-                onMouseLeave={e => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.boxShadow = "none"; }}
-              >
-                <div style={{ fontSize: 36 }}>{"\uD83C\uDFAF"}</div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: T.text }}>Full Drafter</div>
-                <div style={{ fontSize: 12, color: T.textSecondary, lineHeight: 1.5 }}>
-                  Pick <strong>7 cards</strong> from packs of 9
-                </div>
-                <div style={{ fontSize: 11, color: T.textMuted, lineHeight: 1.4 }}>
-                  All cards or Norway Deck, choose your decks, full customization
-                </div>
-              </button>
-
-              {/* Mini Drafter card */}
-              <button onClick={() => setDrafterMode("mini")}
-                style={{
-                  flex: "1 1 220px", maxWidth: 240, padding: "28px 20px", borderRadius: 14,
-                  border: `2px solid ${T.border}`, background: T.surface, cursor: "pointer",
-                  textAlign: "center", transition: "all 0.2s",
-                  display: "flex", flexDirection: "column", alignItems: "center", gap: 10,
-                }}
-                onMouseEnter={e => { e.currentTarget.style.borderColor = T.red; e.currentTarget.style.boxShadow = "0 4px 20px rgba(0,0,0,0.08)"; }}
-                onMouseLeave={e => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.boxShadow = "none"; }}
-              >
-                <div style={{ fontSize: 36 }}>{"\uD83C\uDDF3\uD83C\uDDF4"}</div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: T.text }}>Mini Drafter</div>
-                <div style={{ fontSize: 12, color: T.textSecondary, lineHeight: 1.5 }}>
-                  Pick <strong>5 cards</strong> from a fixed deck of 9
-                </div>
-                <div style={{ fontSize: 11, color: T.textMuted, lineHeight: 1.4 }}>
-                  Norway Deck, 100 fixed decks, stats hidden until final pick
-                </div>
-              </button>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, maxWidth: 500, margin: "0 auto" }}>
+              {[
+                { mode: "full", emoji: "\uD83C\uDFAF", title: "All Cards Draft", sub: "Pick 7 from packs of 9", detail: "Choose your decks, full customization", hoverColor: T.accent },
+                { mode: "mini", emoji: "\uD83C\uDDF3\uD83C\uDDF4", title: "Mini Draft", sub: "Pick 5 from a fixed deck of 9", detail: "Norway Deck, 100 fixed decks, stats hidden", hoverColor: T.red },
+                { mode: "fullCombo", emoji: "\uD83C\uDFAF\uD83C\uDFAF", title: "All Cards Full Draft", sub: "Draft 7 occus + 7 minors", detail: "Full game hand — combo across all 14 cards", hoverColor: T.purple },
+                { mode: "miniCombo", emoji: "\uD83C\uDDF3\uD83C\uDDF4\u2728", title: "Mini Full Draft", sub: "Pick 5 occus + 5 minors", detail: "Full mini hand — combo across all 10 cards", hoverColor: T.blue },
+              ].map(({ mode, emoji, title, sub, detail, hoverColor }) => (
+                <button key={mode} onClick={() => setDrafterMode(mode)}
+                  style={{
+                    padding: "24px 16px", borderRadius: 14,
+                    border: `2px solid ${T.border}`, background: T.surface, cursor: "pointer",
+                    textAlign: "center", transition: "all 0.2s",
+                    display: "flex", flexDirection: "column", alignItems: "center", gap: 8,
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = hoverColor; e.currentTarget.style.boxShadow = "0 4px 20px rgba(0,0,0,0.08)"; }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.boxShadow = "none"; }}
+                >
+                  <div style={{ fontSize: 30 }}>{emoji}</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: T.text }}>{title}</div>
+                  <div style={{ fontSize: 12, color: T.textSecondary, lineHeight: 1.5 }}>{sub}</div>
+                  <div style={{ fontSize: 10, color: T.textMuted, lineHeight: 1.4 }}>{detail}</div>
+                </button>
+              ))}
             </div>
           </div>
         </div>
@@ -870,14 +945,11 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
             <div style={{ textAlign: "center", marginBottom: 32 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginBottom: 4 }}>
                 <div style={{ fontSize: 28, fontWeight: 700, color: T.accent }}>
-                  {isMini ? "\uD83C\uDDF3\uD83C\uDDF4 Mini Drafter" : "\uD83C\uDFAF Full Drafter"}
+                  {modeConfig.label}
                 </div>
               </div>
               <div style={{ fontSize: 14, color: T.textSecondary }}>
-                {isMini
-                  ? "Pick 5 cards from a fixed deck of 9 \u2014 stats hidden"
-                  : "Draft 7 cards from rotating packs against 3 NPCs"
-                }
+                {modeConfig.desc}
               </div>
               <button onClick={resetToModePicker}
                 style={{
@@ -903,7 +975,8 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
               />
             </div>
 
-            {/* Draft type */}
+            {/* Draft type — hidden for combo modes (always both) */}
+            {!isCombo && (
             <div style={{ marginBottom: 24 }}>
               <label style={{ fontSize: 11, color: T.textMuted, textTransform: "uppercase", letterSpacing: 1, display: "block", marginBottom: 6 }}>
                 Draft Type
@@ -922,6 +995,19 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
                 ))}
               </div>
             </div>
+            )}
+            {isCombo && (
+              <div style={{
+                marginBottom: 24, padding: "12px 16px", borderRadius: 10,
+                background: T.accentBg, border: `1px solid ${T.accentLight}`,
+              }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: T.accent }}>Full game draft</div>
+                <div style={{ fontSize: 11, color: T.textSecondary, marginTop: 2 }}>
+                  You'll draft {maxPicks} Occupations first, then {maxPicks} Minor Improvements.
+                  Tag combos across your whole hand at the end.
+                </div>
+              </div>
+            )}
 
             {/* Mini: Deck number selector */}
             {isMini && (
@@ -970,7 +1056,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
               </div>
             )}
 
-            {/* Card pool toggle — only for Full Drafter */}
+            {/* Card pool toggle — only for full modes */}
             {!isMini && (
               <div style={{ marginBottom: 20 }}>
                 <label style={{ fontSize: 11, color: T.textMuted, textTransform: "uppercase", letterSpacing: 1, display: "block", marginBottom: 6 }}>
@@ -1091,6 +1177,17 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
               {"\uD83C\uDDF3\uD83C\uDDF4"} Deck #{miniDeckNumber}
             </span>
           )}
+          {isCombo && (
+            <span style={{
+              fontSize: 11, padding: "2px 10px", borderRadius: 99, fontWeight: 600,
+              background: comboPhase === 1 ? T.accentBg : "#f5f3ff",
+              color: comboPhase === 1 ? T.accent : T.purple,
+              border: `1px solid ${comboPhase === 1 ? T.accentLight : T.purple + "33"}`,
+            }}>
+              {comboPhase === 1 ? "\uD83D\uDC64 Occupations" : "\uD83D\uDD27 Minor Improvements"}
+              {" "}({comboPhase}/2)
+            </span>
+          )}
           <div style={{ fontSize: 14, fontWeight: 600, color: T.accent }}>
             Pick {myPicks.length + 1}/{maxPicks}
           </div>
@@ -1098,7 +1195,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
             {currentPack.length} cards remaining
           </div>
           <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
-            {myPicks.length > 0 && (
+            {(myPicks.length > 0 || occPicks.length > 0) && (
               <button onClick={() => setShowDraftHand(s => !s)}
                 style={{
                   background: showDraftHand ? T.accentBg : T.surfaceAlt,
@@ -1107,7 +1204,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
                   padding: "4px 10px", fontSize: 11, fontWeight: 600, cursor: "pointer",
                   display: "flex", alignItems: "center", gap: 4,
                 }}>
-                {"\u270B"} {myPicks.length}
+                {"\u270B"} {isCombo ? occPicks.length + myPicks.length : myPicks.length}
               </button>
             )}
             {myPicks.map((id, i) => {
@@ -1130,14 +1227,53 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
         </div>
 
         {/* Picked hand panel (collapsible) */}
-        {showDraftHand && myPicks.length > 0 && (
+        {showDraftHand && (myPicks.length > 0 || occPicks.length > 0) && (
           <div style={{
             borderBottom: `1px solid ${T.border}`, background: T.surfaceAlt,
             padding: "10px 16px", flexShrink: 0,
           }}>
-            <div style={{ fontSize: 10, color: T.textMuted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
-              My Picks ({myPicks.length}/{maxPicks})
-            </div>
+            {/* In combo phase 2, show occupation picks from phase 1 */}
+            {isCombo && comboPhase === 2 && occPicks.length > 0 && (
+              <>
+                <div style={{ fontSize: 10, color: T.accent, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6, fontWeight: 700 }}>
+                  {"\uD83D\uDC64"} Occupations ({occPicks.length})
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+                  {occPicks.map((id, i) => {
+                    const c = allCards.find(x => x.id === id);
+                    if (!c) return null;
+                    const src = cardImgSrc(c);
+                    return (
+                      <div key={id} style={{
+                        borderRadius: 6, overflow: "hidden", border: `1px solid ${T.accent}44`,
+                        background: T.surface, width: 80, flexShrink: 0, opacity: 0.85,
+                      }}>
+                        <div style={{ position: "relative", width: 80, height: 105, overflow: "hidden", background: T.surfaceAlt }}>
+                          {src ? (
+                            <img src={src} alt={c.name} style={{ width: 80, height: 105, objectFit: "cover", objectPosition: "top", display: "block" }} />
+                          ) : (
+                            <div style={{ padding: 4, fontSize: 8, color: T.textMuted, textAlign: "center", lineHeight: 1.2 }}>
+                              <div style={{ fontWeight: 700, color: T.text, marginBottom: 2 }}>{c.name}</div>
+                            </div>
+                          )}
+                        </div>
+                        <div style={{ padding: "2px 4px" }}>
+                          <div style={{ fontSize: 9, fontWeight: 600, color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{ fontSize: 10, color: T.purple, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6, fontWeight: 700 }}>
+                  {"\uD83D\uDD27"} Minor Improvements ({myPicks.length}/{maxPicks})
+                </div>
+              </>
+            )}
+            {!isCombo && (
+              <div style={{ fontSize: 10, color: T.textMuted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
+                My Picks ({myPicks.length}/{maxPicks})
+              </div>
+            )}
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {myPicks.map((id, i) => {
                 const c = allCards.find(x => x.id === id);
@@ -1209,7 +1345,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
         <DraftResults
           picks={myPicks}
           allCards={allCards}
-          draftType={draftType}
+          draftType={activeDraftType}
           saveDraftType={saveDraftType}
           username={username}
           onSave={handleSave}
@@ -1219,6 +1355,9 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
           isMini={isMini}
           saveResult={saveResult}
           onViewHands={onViewHands}
+          isCombo={isCombo}
+          occPicks={occPicks}
+          minorPicks={isCombo ? myPicks : []}
         />
 
         <div style={{ maxWidth: 900, margin: "0 auto", padding: "0 24px 24px" }}>

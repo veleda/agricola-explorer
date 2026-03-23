@@ -27,7 +27,13 @@ const DRAFT_TYPE_TABS = [
   { key: "MinorImprovement", label: "Minor Improvements" },
   { key: "MiniOccupation", label: "Mini Occupations" },
   { key: "MiniMinorImprovement", label: "Mini Minor Imps" },
+  { key: "FullCombo", label: "Full Draft" },
+  { key: "MiniCombo", label: "Mini Full Draft" },
 ];
+
+// Combo draft types have both occupations and minor improvements
+const COMBO_DRAFT_TYPES = new Set(["FullCombo", "MiniCombo"]);
+const COMBO_PICK_SPLIT = { FullCombo: 7, MiniCombo: 5 }; // first N picks are occupations
 
 // ── API helpers ──────────────────────────────────────────────────────────────
 async function searchHands(q, draftType, page) {
@@ -260,6 +266,10 @@ function HandRow({ hand, cardMap, isExpanded, onToggle, onShowTwins }) {
   const pickCards = hand.picks.map(id => cardMap[id]).filter(Boolean);
   const avgWin = pickCards.length > 0 ? pickCards.reduce((s, c) => s + (c.winRatio || 0), 0) / pickCards.length : 0;
   const isMini = hand.draftType?.startsWith("Mini");
+  const isCombo = COMBO_DRAFT_TYPES.has(hand.draftType);
+  const comboSplit = COMBO_PICK_SPLIT[hand.draftType] || 0;
+  const occCards = isCombo ? pickCards.slice(0, comboSplit) : [];
+  const minorCards = isCombo ? pickCards.slice(comboSplit) : [];
 
   return (
     <div style={{
@@ -288,11 +298,13 @@ function HandRow({ hand, cardMap, isExpanded, onToggle, onShowTwins }) {
 
         {/* Card thumbnails */}
         <div style={{ display: "flex", gap: 3, flex: 1, minWidth: 0, overflow: "hidden" }}>
-          {pickCards.slice(0, 7).map(c => (
-            <SmallCardImage key={c.id} card={c} />
+          {pickCards.slice(0, isCombo ? 10 : 7).map((c, i) => (
+            <span key={c.id} style={{ display: "inline-flex", borderLeft: isCombo && i === comboSplit ? `2px solid ${T.accent}44` : "none", paddingLeft: isCombo && i === comboSplit ? 3 : 0 }}>
+              <SmallCardImage card={c} />
+            </span>
           ))}
-          {pickCards.length > 7 && (
-            <div style={{ fontSize: 10, color: T.textMuted, alignSelf: "center" }}>+{pickCards.length - 7}</div>
+          {pickCards.length > (isCombo ? 10 : 7) && (
+            <div style={{ fontSize: 10, color: T.textMuted, alignSelf: "center" }}>+{pickCards.length - (isCombo ? 10 : 7)}</div>
           )}
         </div>
 
@@ -326,19 +338,54 @@ function HandRow({ hand, cardMap, isExpanded, onToggle, onShowTwins }) {
             </div>
           )}
 
-          {/* Card images */}
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
-            {pickCards.map((c, i) => (
-              <div key={c.id} style={{ position: "relative" }}>
-                <ExpandedCardImage card={c} />
-                <div style={{
-                  position: "absolute", top: 2, left: 2,
-                  background: "rgba(255,255,255,0.9)", borderRadius: 99,
-                  padding: "1px 5px", fontSize: 8, fontWeight: 700, color: T.accent,
-                }}>#{i + 1}</div>
+          {/* Card images — split by type for combo hands */}
+          {isCombo ? (
+            <>
+              <div style={{ fontSize: 11, fontWeight: 700, color: T.accent, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
+                {"\uD83D\uDC64"} Occupations
               </div>
-            ))}
-          </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center", marginBottom: 14 }}>
+                {occCards.map((c, i) => (
+                  <div key={c.id} style={{ position: "relative" }}>
+                    <ExpandedCardImage card={c} />
+                    <div style={{
+                      position: "absolute", top: 2, left: 2,
+                      background: "rgba(255,255,255,0.9)", borderRadius: 99,
+                      padding: "1px 5px", fontSize: 8, fontWeight: 700, color: T.accent,
+                    }}>#{i + 1}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: T.purple, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
+                {"\uD83D\uDD27"} Minor Improvements
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+                {minorCards.map((c, i) => (
+                  <div key={c.id} style={{ position: "relative" }}>
+                    <ExpandedCardImage card={c} />
+                    <div style={{
+                      position: "absolute", top: 2, left: 2,
+                      background: "rgba(255,255,255,0.9)", borderRadius: 99,
+                      padding: "1px 5px", fontSize: 8, fontWeight: 700, color: T.purple,
+                    }}>#{i + 1}</div>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+              {pickCards.map((c, i) => (
+                <div key={c.id} style={{ position: "relative" }}>
+                  <ExpandedCardImage card={c} />
+                  <div style={{
+                    position: "absolute", top: 2, left: 2,
+                    background: "rgba(255,255,255,0.9)", borderRadius: 99,
+                    padding: "1px 5px", fontSize: 8, fontWeight: 700, color: T.accent,
+                  }}>#{i + 1}</div>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Stats summary */}
           <div style={{
