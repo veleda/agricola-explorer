@@ -2,6 +2,19 @@ import { useState, useCallback, useMemo, useEffect } from "react";
 
 const API_BASE = "";
 
+// ── Responsive hook ──────────────────────────────────────────────────────────
+function useIsMobile(breakpoint = 600) {
+  const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth < breakpoint);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${breakpoint - 1}px)`);
+    const handler = (e) => setIsMobile(e.matches);
+    mq.addEventListener("change", handler);
+    setIsMobile(mq.matches);
+    return () => mq.removeEventListener("change", handler);
+  }, [breakpoint]);
+  return isMobile;
+}
+
 // ── Light theme palette (matches drafter & hands) ────────────────────────────
 const T = {
   bg: "#faf9f7",
@@ -298,12 +311,38 @@ function ScoreBrowser({ onClose }) {
   );
 }
 
+// ── Stepper button for mobile ────────────────────────────────────────────────
+function StepperBtn({ direction, onClick }) {
+  const isMinus = direction === "minus";
+  return (
+    <button onClick={onClick} style={{
+      width: 36, height: 36, borderRadius: 10,
+      border: `1.5px solid ${T.border}`,
+      background: T.surface, color: isMinus ? T.red : T.green,
+      fontSize: 20, fontWeight: 700, lineHeight: 1,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      cursor: "pointer", transition: "all 0.12s",
+      flexShrink: 0, padding: 0, WebkitTapHighlightColor: "transparent",
+    }}
+      onTouchStart={e => { e.currentTarget.style.background = isMinus ? "#fef2f2" : T.greenLight; }}
+      onTouchEnd={e => { e.currentTarget.style.background = T.surface; }}
+      onMouseDown={e => { e.currentTarget.style.background = isMinus ? "#fef2f2" : T.greenLight; }}
+      onMouseUp={e => { e.currentTarget.style.background = T.surface; }}
+      onMouseLeave={e => { e.currentTarget.style.background = T.surface; }}
+    >
+      {isMinus ? "−" : "+"}
+    </button>
+  );
+}
+
 // ── Main component ───────────────────────────────────────────────────────────
 export default function ScoreSheet() {
+  const isMobile = useIsMobile();
   const [name, setName] = useState("");
   const [tournament, setTournament] = useState("");
   const [tableNumber, setTableNumber] = useState("");
   const [gameNumber, setGameNumber] = useState("");
+  const [startingPosition, setStartingPosition] = useState("");
   const [values, setValues] = useState(defaultValues);
   const [showRef, setShowRef] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -319,6 +358,14 @@ export default function ScoreSheet() {
     if (!isNaN(n) && n >= 0) {
       setValues(v => ({ ...v, [key]: n }));
     }
+  }, []);
+
+  const stepValue = useCallback((key, delta) => {
+    setValues(v => {
+      const cur = typeof v[key] === "number" ? v[key] : 0;
+      const next = cur + delta;
+      return { ...v, [key]: next >= 0 ? next : 0 };
+    });
   }, []);
 
   // Compute points for each row
@@ -362,6 +409,7 @@ export default function ScoreSheet() {
     setTournament("");
     setTableNumber("");
     setGameNumber("");
+    setStartingPosition("");
     setSaveMsg(null);
   }, []);
 
@@ -382,6 +430,7 @@ export default function ScoreSheet() {
         tournament: tournament.trim() || null,
         tableNumber: tableNumber.trim() || null,
         gameNumber: gameNumber.trim() || null,
+        startingPosition: startingPosition.trim() || null,
         values,
         points,
         total,
@@ -397,7 +446,7 @@ export default function ScoreSheet() {
     } finally {
       setSaving(false);
     }
-  }, [name, tournament, tableNumber, gameNumber, values, points, total]);
+  }, [name, tournament, tableNumber, gameNumber, startingPosition, values, points, total]);
 
   // Group categories
   const grouped = useMemo(() => {
@@ -473,7 +522,7 @@ export default function ScoreSheet() {
             />
           </div>
 
-          {/* Table number + Game number — side by side */}
+          {/* Table number + Game number + Starting position — side by side */}
           <div style={{ display: "flex", gap: 10 }}>
             <div style={{ flex: 1 }}>
               <label style={{ display: "block", fontSize: 10, fontWeight: 600, color: T.textMuted, marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.5 }}>
@@ -498,6 +547,23 @@ export default function ScoreSheet() {
               </label>
               <input
                 type="text" value={gameNumber} onChange={e => setGameNumber(e.target.value)}
+                placeholder="—"
+                style={{
+                  width: "100%", padding: "6px 10px", borderRadius: 8,
+                  border: `1.5px solid ${T.border}`, background: T.bg,
+                  fontSize: 13, color: T.text, outline: "none",
+                  boxSizing: "border-box", transition: "border-color 0.15s",
+                }}
+                onFocus={e => e.target.style.borderColor = T.accent}
+                onBlur={e => e.target.style.borderColor = T.border}
+              />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={{ display: "block", fontSize: 10, fontWeight: 600, color: T.textMuted, marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                Start pos.
+              </label>
+              <input
+                type="text" value={startingPosition} onChange={e => setStartingPosition(e.target.value)}
                 placeholder="—"
                 style={{
                   width: "100%", padding: "6px 10px", borderRadius: 8,
@@ -575,31 +641,60 @@ export default function ScoreSheet() {
             }}>
               {items.map((cat, i) => (
                 <div key={cat.key} style={{
-                  display: "flex", alignItems: "center", gap: 10,
-                  padding: "10px 16px",
+                  padding: isMobile ? "10px 12px" : "10px 16px",
                   borderTop: i > 0 ? `1px solid ${T.borderLight}` : "none",
                 }}>
-                  <span style={{ fontSize: 18, flexShrink: 0, width: 24, textAlign: "center" }}>{cat.icon}</span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: T.text, lineHeight: 1.2 }}>{cat.label}</div>
-                    <div style={{ fontSize: 10, color: T.textMuted, marginTop: 1 }}>{cat.hint}</div>
-                  </div>
-                  <input
-                    type="number" min="0" inputMode="numeric"
-                    value={values[cat.key] ?? ""}
-                    onChange={e => setValue(cat.key, e.target.value)}
-                    placeholder="0"
-                    style={{
-                      width: 56, padding: "6px 8px", borderRadius: 8, textAlign: "center",
-                      border: `1.5px solid ${T.border}`, background: T.bg,
-                      fontSize: 15, fontWeight: 600, color: T.text,
-                      outline: "none", transition: "border-color 0.15s",
-                      MozAppearance: "textfield",
-                    }}
-                    onFocus={e => e.target.style.borderColor = T.accent}
-                    onBlur={e => e.target.style.borderColor = T.border}
-                  />
-                  <PointsBadge pts={points[cat.key]} />
+                  {isMobile ? (
+                    /* ── Mobile: stacked layout with stepper buttons ── */
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <span style={{ fontSize: 18, flexShrink: 0 }}>{cat.icon}</span>
+                          <div>
+                            <div style={{ fontSize: 14, fontWeight: 700, color: T.text }}>{cat.label}</div>
+                            <div style={{ fontSize: 10, color: T.textMuted }}>{cat.hint}</div>
+                          </div>
+                        </div>
+                        <PointsBadge pts={points[cat.key]} />
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12 }}>
+                        <StepperBtn direction="minus" onClick={() => stepValue(cat.key, -1)} />
+                        <div style={{
+                          minWidth: 48, textAlign: "center",
+                          fontSize: 22, fontWeight: 800, color: T.text,
+                          lineHeight: 1,
+                        }}>
+                          {values[cat.key] ?? 0}
+                        </div>
+                        <StepperBtn direction="plus" onClick={() => stepValue(cat.key, 1)} />
+                      </div>
+                    </div>
+                  ) : (
+                    /* ── Desktop: inline layout with number input ── */
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <span style={{ fontSize: 18, flexShrink: 0, width: 24, textAlign: "center" }}>{cat.icon}</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: T.text, lineHeight: 1.2 }}>{cat.label}</div>
+                        <div style={{ fontSize: 10, color: T.textMuted, marginTop: 1 }}>{cat.hint}</div>
+                      </div>
+                      <input
+                        type="number" min="0" inputMode="numeric"
+                        value={values[cat.key] ?? ""}
+                        onChange={e => setValue(cat.key, e.target.value)}
+                        placeholder="0"
+                        style={{
+                          width: 56, padding: "6px 8px", borderRadius: 8, textAlign: "center",
+                          border: `1.5px solid ${T.border}`, background: T.bg,
+                          fontSize: 15, fontWeight: 600, color: T.text,
+                          outline: "none", transition: "border-color 0.15s",
+                          MozAppearance: "textfield",
+                        }}
+                        onFocus={e => e.target.style.borderColor = T.accent}
+                        onBlur={e => e.target.style.borderColor = T.border}
+                      />
+                      <PointsBadge pts={points[cat.key]} />
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -620,6 +715,7 @@ export default function ScoreSheet() {
                 {tournament ? ` · ${tournament}` : ""}
                 {tableNumber ? ` · T${tableNumber}` : ""}
                 {gameNumber ? ` · G${gameNumber}` : ""}
+                {startingPosition ? ` · P${startingPosition}` : ""}
               </div>
             )}
           </div>
