@@ -741,7 +741,28 @@ export default function App() {
 
   // Norway Deck toggle
   const [norwayOnly, setNorwayOnly] = useState(false);
-  const activeCards = useMemo(() => norwayOnly ? allCards.filter(c => c.isNo) : allCards, [allCards, norwayOnly]);
+  const activeCards = useMemo(() => {
+    if (!norwayOnly) return allCards;
+    const noCards = allCards.filter(c => c.isNo);
+    // For duplicate card names, exclude the Revised version and keep the
+    // original deck version (Globus/G4/G5/K/I/E etc.) in the Norwegian deck.
+    const byName = new Map();
+    for (const c of noCards) {
+      if (!byName.has(c.name)) byName.set(c.name, []);
+      byName.get(c.name).push(c);
+    }
+    const excludeIds = new Set();
+    for (const [, copies] of byName) {
+      if (copies.length < 2) continue;
+      const hasOriginal = copies.some(c => !(c.deck || "").startsWith("Revised"));
+      if (hasOriginal) {
+        for (const c of copies) {
+          if ((c.deck || "").startsWith("Revised")) excludeIds.add(c.id);
+        }
+      }
+    }
+    return excludeIds.size > 0 ? noCards.filter(c => !excludeIds.has(c.id)) : noCards;
+  }, [allCards, norwayOnly]);
 
   // Filters & UI state
   const [filters, setFilters] = useState({

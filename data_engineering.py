@@ -223,21 +223,37 @@ def _list_to_iris(items: list[str]) -> str:
 
 # ─── Main loader ─────────────────────────────────────────────────────────────
 
+def _normalise_stats_name(name: str) -> str:
+    """Normalise a card name for tournament-stats matching.
+
+    Handles apostrophe variants (\u2019 vs '), removes spaces/punctuation,
+    and lowercases so that truncated CSV names can match via prefix lookup.
+    """
+    return re.sub(r'[^a-z0-9]', '', name.lower())
+
+
 def _load_tournament_stats(csv_path: str = "data/agricola_cards_all.csv") -> dict:
-    """Load tournament stats from the legacy CSV, keyed by normalised card name."""
+    """Load tournament stats from the legacy CSV, keyed by normalised card name.
+
+    Returns two dicts: (exact_lookup, norm_lookup) where norm_lookup uses
+    stripped alphanumeric keys for fuzzy/prefix matching.
+    """
     import os
     if not os.path.exists(csv_path):
-        return {}
+        return {}, {}
     stats_df = pl.read_csv(csv_path, infer_schema_length=10000)
     stats_df = stats_df.rename({c: c.replace(" ", "_") for c in stats_df.columns if " " in c})
     stats_cols = ["dealt", "drafted", "played", "won", "ADP",
                   "play_ratio", "win_ratio", "PWR", "PWR_no_log", "banned", "is_no"]
-    lookup = {}
+    exact_lookup = {}
+    norm_lookup = {}
     for row in stats_df.iter_rows(named=True):
-        name = (row.get("Name") or "").strip().lower()
+        name = (row.get("Name") or "").strip()
+        vals = {col: row.get(col) for col in stats_cols}
         if name:
-            lookup[name] = {col: row.get(col) for col in stats_cols}
-    return lookup
+            exact_lookup[name.lower()] = vals
+            norm_lookup[_normalise_stats_name(name)] = vals
+    return exact_lookup, norm_lookup
 
 
 def _load_database_xlsx(xlsx_path: str = "data/AgricolaCards_Database_260224_v2.xlsx") -> dict:
@@ -295,6 +311,7 @@ def _load_database_xlsx(xlsx_path: str = "data/AgricolaCards_Database_260224_v2.
             "drafted": _int(d.get("drafted")),
             "played": _int(d.get("played")),
             "won": _int(d.get("won")),
+            "is_no": True,  # presence in the DB = Norwegian deck card
         }
     wb.close()
     return lookup
@@ -325,8 +342,8 @@ def load_cards(json_path: str = "data/cards.json",
     with open(json_path, "r") as f:
         raw_cards = _json.load(f)
 
-    # Load tournament stats for merge
-    stats = _load_tournament_stats(stats_csv)
+    # Load tournament stats for merge (exact + normalised keys)
+    stats_exact, stats_norm = _load_tournament_stats(stats_csv)
 
     # Load curated database XLSX (PWRcorr, Deck2, has_bonus_symbol)
     db_xlsx = _load_database_xlsx()
@@ -339,7 +356,20 @@ def load_cards(json_path: str = "data/cards.json",
     for c in raw_cards:
         name = c.get("card_name", "")
         name_lower = name.strip().lower()
-        st = stats.get(name_lower, {})
+        name_norm = _normalise_stats_name(name)
+        # Try exact match first, then normalised (handles apostrophe variants),
+        # then prefix match (handles truncated CSV names like "Animalhusbandryworke").
+        st = stats_exact.get(name_lower)
+        if not st:
+            st = stats_norm.get(name_norm)
+        if not st:
+            # Prefix match: some CSV names are truncated at ~20 chars
+            for csv_norm, csv_vals in stats_norm.items():
+                if csv_norm and name_norm.startswith(csv_norm) and len(csv_norm) >= 10:
+                    st = csv_vals
+                    break
+        if not st:
+            st = {}
         xlsx = db_xlsx.get(c.get("card_uuid", ""), {})
 
         # Use first deck for primary deck column; keep all decks as comma-sep
@@ -406,7 +436,8 @@ def load_cards(json_path: str = "data/cards.json",
             "PWR": pwr,
             "PWR_no_log": st.get("PWR_no_log"),
             "banned": st.get("banned"),
-            "is_no": st.get("is_no"),
+            # Norwegian deck: DB presence (by UUID) is the definitive source
+            "is_no": xlsx.get("is_no", False),
             # Curated database XLSX fields (merged on card_uuid)
             "PWRcorr": xlsx.get("PWRcorr"),
             "Deck2": xlsx.get("Deck2"),
