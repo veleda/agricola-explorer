@@ -1,35 +1,163 @@
-@prefix : <http://veronahe.no/agricola/> .
-
+@prefix : <http://agricola.veronahe.no/> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 
-:Cost a owl:Class ;
-    rdfs:label "Cost"@en .
+# ── Ontology declaration ─────────────────────────────────────────────────────
 
-:Clay a :Cost ;
-    rdfs:label "clay"@en .
+<http://agricola.veronahe.no/> a owl:Ontology ;
+    rdfs:label "Agricola Card Ontology"@en ;
+    rdfs:comment "Ontology for the Agricola board game card knowledge graph."@en .
 
-:Wood a :Cost ;
-    rdfs:label "wood"@en .
+# ── Classes ──────────────────────────────────────────────────────────────────
 
-:Stone a :Cost ;
-    rdfs:label "stone"@en .
-
-:Reed a :Cost ;
-    rdfs:label "reed"@en .
-
-:CardCateogry a owl:Class .
+:CardCategory a owl:Class ;
+    rdfs:label "Card Category"@en .
 
 :Occupation a owl:Class ;
     rdfs:label "Occupation"@en ;
-    rdfs:subClassOf :CardCateogry .
+    rdfs:subClassOf :CardCategory .
 
 :MajorImprovement a owl:Class ;
-    rdfs:label "Major improvement"@en ;
-    rdfs:subClassOf :CardCateogry .
+    rdfs:label "Major Improvement"@en ;
+    rdfs:subClassOf :CardCategory .
 
 :MinorImprovement a owl:Class ;
-    rdfs:label "Minor improvement"@en ;
-    rdfs:subClassOf :CardCateogry .
+    rdfs:label "Minor Improvement"@en ;
+    rdfs:subClassOf :CardCategory .
+
+:Cost a owl:Class ;
+    rdfs:label "Cost"@en .
+
+:CostPermutation a owl:Class ;
+    rdfs:label "Cost Permutation"@en ;
+    rdfs:comment "A unique combination of resources required to play a card."@en .
+
+# ── Datatype properties (card attributes) ────────────────────────────────────
+
+:id a owl:DatatypeProperty ;
+    rdfs:label "card ID"@en ;
+    rdfs:range xsd:string .
+
+:deck a owl:DatatypeProperty ;
+    rdfs:label "deck"@en ;
+    rdfs:range xsd:string .
+
+:players a owl:DatatypeProperty ;
+    rdfs:label "minimum players"@en ;
+    rdfs:range xsd:string .
+
+:prerequisite a owl:DatatypeProperty ;
+    rdfs:label "prerequisite"@en ;
+    rdfs:range xsd:string .
+
+:cardText a owl:DatatypeProperty ;
+    rdfs:label "card text"@en ;
+    rdfs:range xsd:string .
+
+:bonusPoints a owl:DatatypeProperty ;
+    rdfs:label "bonus points"@en ;
+    rdfs:range xsd:string .
+
+:banned a owl:DatatypeProperty ;
+    rdfs:label "banned"@en ;
+    rdfs:range xsd:boolean .
+
+:isNo a owl:DatatypeProperty ;
+    rdfs:label "in Norwegian deck"@en ;
+    rdfs:range xsd:boolean .
+
+# ── Datatype properties (tournament statistics) ──────────────────────────────
+
+:dealt a owl:DatatypeProperty ;
+    rdfs:label "times dealt"@en ;
+    rdfs:range xsd:double .
+
+:drafted a owl:DatatypeProperty ;
+    rdfs:label "times drafted"@en ;
+    rdfs:range xsd:double .
+
+:played a owl:DatatypeProperty ;
+    rdfs:label "times played"@en ;
+    rdfs:range xsd:double .
+
+:won a owl:DatatypeProperty ;
+    rdfs:label "times won"@en ;
+    rdfs:range xsd:double .
+
+:adp a owl:DatatypeProperty ;
+    rdfs:label "average draft position"@en ;
+    rdfs:range xsd:double .
+
+:playRatio a owl:DatatypeProperty ;
+    rdfs:label "play ratio"@en ;
+    rdfs:range xsd:double .
+
+:winRatio a owl:DatatypeProperty ;
+    rdfs:label "win ratio"@en ;
+    rdfs:range xsd:double .
+
+:pwr a owl:DatatypeProperty ;
+    rdfs:label "power rating"@en ;
+    rdfs:range xsd:double .
+
+:pwrNoLog a owl:DatatypeProperty ;
+    rdfs:label "power rating (no log)"@en ;
+    rdfs:range xsd:double .
+
+:pwrNormalized a owl:DatatypeProperty ;
+    rdfs:label "power rating normalized"@en ;
+    rdfs:range xsd:string .
+
+# ── Object properties ────────────────────────────────────────────────────────
+
+:hasCost a owl:ObjectProperty ;
+    rdfs:label "has cost"@en ;
+    rdfs:range :CostPermutation .
+
+:gains a owl:ObjectProperty ;
+    rdfs:label "gains"@en ;
+    rdfs:comment "Resource or effect this card produces."@en .
+
+:affects a owl:ObjectProperty ;
+    rdfs:label "affects"@en ;
+    rdfs:comment "Game mechanic this card interacts with."@en .
+
+:relatedTo a owl:ObjectProperty ;
+    rdfs:label "related to"@en ;
+    rdfs:comment "Another card referenced in this card's text."@en .
+
+:costValue a owl:ObjectProperty ;
+    rdfs:label "cost value"@en ;
+    rdfs:comment "Special cost resource reference."@en .
+
+# ── Datatype properties (cost permutation resources) ─────────────────────────
+
+:clay a owl:DatatypeProperty ;
+    rdfs:label "clay cost"@en ;
+    rdfs:range xsd:integer .
+
+:stone a owl:DatatypeProperty ;
+    rdfs:label "stone cost"@en ;
+    rdfs:range xsd:integer .
+
+:reed a owl:DatatypeProperty ;
+    rdfs:label "reed cost"@en ;
+    rdfs:range xsd:integer .
+
+:wood a owl:DatatypeProperty ;
+    rdfs:label "wood cost"@en ;
+    rdfs:range xsd:integer .
+
+:food a owl:DatatypeProperty ;
+    rdfs:label "food cost"@en ;
+    rdfs:range xsd:integer .
+
+:grain a owl:DatatypeProperty ;
+    rdfs:label "grain cost"@en ;
+    rdfs:range xsd:integer .
+
+:vegetable a owl:DatatypeProperty ;
+    rdfs:label "vegetable cost"@en ;
+    rdfs:range xsd:integer .

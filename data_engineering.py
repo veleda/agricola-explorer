@@ -3,7 +3,7 @@ from collections import OrderedDict
 
 import polars as pl
 
-ns = "http://veronahe.no/agricola/"
+ns = "http://agricola.veronahe.no/"
 
 
 # ─── Cost parsing helpers ─────────────────────────────────────────────────────

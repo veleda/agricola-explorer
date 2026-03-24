@@ -1,7 +1,6 @@
-@prefix def: <urn:maplib_default:> .
 @prefix ottr: <http://ns.ottr.xyz/0.4/> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
-@prefix : <http://veronahe.no/agricola/> .
+@prefix : <http://agricola.veronahe.no/> .
 
 :Card [
     ? xsd:string ?Card_ID,
@@ -40,23 +39,23 @@
   ottr:Triple(?subject, :id, ?Card_ID) ,
   ottr:Triple(?subject, rdfs:label, ?Name) ,
   ottr:Triple(?subject, rdf:type, ?Type) ,
-  ottr:Triple(?subject, def:Deck, ?Deck) ,
-  ottr:Triple(?subject, def:Players, ?Players) ,
-  ottr:Triple(?subject, def:Prerequisite, ?Prerequisite) ,
-  ottr:Triple(?subject, def:Card_Text, ?Card_Text) ,
+  ottr:Triple(?subject, :deck, ?Deck) ,
+  ottr:Triple(?subject, :players, ?Players) ,
+  ottr:Triple(?subject, :prerequisite, ?Prerequisite) ,
+  ottr:Triple(?subject, :cardText, ?Card_Text) ,
   ottr:Triple(?subject, :bonusPoints, ?Bonus_Points) ,
   ottr:Triple(?subject, :banned, ?banned) ,
-  ottr:Triple(?subject, def:is_no, ?is_no) ,
-  ottr:Triple(?subject, def:dealt, ?dealt) ,
-  ottr:Triple(?subject, def:drafted, ?drafted) ,
-  ottr:Triple(?subject, def:played, ?played) ,
-  ottr:Triple(?subject, def:won, ?won) ,
-  ottr:Triple(?subject, def:ADP, ?ADP) ,
-  ottr:Triple(?subject, def:play_ratio, ?play_ratio) ,
-  ottr:Triple(?subject, def:win_ratio, ?win_ratio) ,
-  ottr:Triple(?subject, def:PWR, ?PWR) ,
-  ottr:Triple(?subject, def:PWR_no_log, ?PWR_no_log) ,
-  ottr:Triple(?subject, def:PWR_normalized, ?PWR_normalized),
+  ottr:Triple(?subject, :isNo, ?is_no) ,
+  ottr:Triple(?subject, :dealt, ?dealt) ,
+  ottr:Triple(?subject, :drafted, ?drafted) ,
+  ottr:Triple(?subject, :played, ?played) ,
+  ottr:Triple(?subject, :won, ?won) ,
+  ottr:Triple(?subject, :adp, ?ADP) ,
+  ottr:Triple(?subject, :playRatio, ?play_ratio) ,
+  ottr:Triple(?subject, :winRatio, ?win_ratio) ,
+  ottr:Triple(?subject, :pwr, ?PWR) ,
+  ottr:Triple(?subject, :pwrNoLog, ?PWR_no_log) ,
+  ottr:Triple(?subject, :pwrNormalized, ?PWR_normalized),
   ottr:Triple(?subject, :hasCost, ?hasCost),
 } .
 

@@ -132,13 +132,12 @@ const EXPLORER_LIGHT = {
 // ── Build SPARQL string from filters ────────────────────────────────────────
 function buildSparql(filters, limit, allTypes) {
   const lines = [
-    "PREFIX : <http://veronahe.no/agricola/>",
-    "PREFIX def: <urn:maplib_default:>",
+    "PREFIX : <http://agricola.veronahe.no/>",
     "",
     "SELECT ?name ?deck ?winRatio",
     "WHERE {"
   ];
-  lines.push("  ?card rdfs:label ?name ; def:Deck ?deck ; def:win_ratio ?winRatio .");
+  lines.push("  ?card rdfs:label ?name ; :deck ?deck ; :winRatio ?winRatio .");
 
   if (filters.types.length > 0 && filters.types.length < allTypes.length) {
     const typeIris = filters.types.map(t => ":" + t).join(", ");
