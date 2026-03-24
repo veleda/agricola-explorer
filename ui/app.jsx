@@ -717,8 +717,8 @@ function Drawer({ open, onClose, side, children, title, themeE }) {
 export default function App() {
   const isMobile = useIsMobile();
 
-  // App mode: "explorer" | "drafter" | "hands"
-  const [appMode, setAppMode] = useState("explorer");
+  // App mode: "home" (mobile only) | "explorer" | "drafter" | "hands" | "score"
+  const [appMode, setAppMode] = useState(isMobile ? "home" : "explorer");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [handsDraftType, setHandsDraftType] = useState(null); // for linking from drafter
   const [explorerTheme, setExplorerTheme] = useState("dark");
@@ -1101,8 +1101,9 @@ export default function App() {
 
   // ── MOBILE LAYOUT ─────────────────────────────────────────────────────
   if (isMobile) {
-    // Mobile mode switcher — three pill buttons
+    // Mobile mode switcher — pill buttons with home icon
     const mobileModes = [
+      { mode: "home", emoji: "\uD83C\uDFE0", label: "" },
       { mode: "explorer", emoji: "\uD83D\uDDFA\uFE0F", label: "Explore" },
       { mode: "drafter", emoji: "\uD83C\uDCCF", label: "Draft" },
       { mode: "hands", emoji: "\uD83E\uDD1D", label: "Hands" },
@@ -1122,12 +1123,72 @@ export default function App() {
                 cursor: "pointer", transition: "all 0.15s",
                 display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap",
               }}>
-              <span style={{ fontSize: 13 }}>{emoji}</span>{label}
+              <span style={{ fontSize: mode === "home" ? 15 : 13 }}>{emoji}</span>{label}
             </button>
           );
         })}
       </div>
     );
+
+    // ── Mobile home screen ────────────────────────────────────────────
+    if (appMode === "home") {
+      const homeItems = [
+        { mode: "explorer", emoji: "\uD83D\uDDFA\uFE0F", title: "Card Explorer", desc: `Browse & search ${activeCards.length} cards`, color: E.blue },
+        { mode: "drafter", emoji: "\uD83C\uDCCF", title: "Drafter", desc: "Draft cards against 3 NPCs", color: E.accent },
+        { mode: "hands", emoji: "\uD83E\uDD1D", title: "Community Hands", desc: "Browse drafted hands", color: E.purple || "#7c3aed" },
+        { mode: "score", emoji: "\uD83D\uDCCB", title: "Score Sheet", desc: "Calculate your game score", color: E.green || "#059669" },
+      ];
+      return (
+        <div style={{
+          display: "flex", flexDirection: "column", height: "100vh",
+          background: E.bg, color: E.textSecondary, fontFamily: "Inter, system-ui, sans-serif",
+        }}>
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", padding: "24px 20px" }}>
+            {/* Logo / title */}
+            <div style={{ textAlign: "center", marginBottom: 36 }}>
+              <div style={{ fontSize: 48, marginBottom: 8 }}>{"\uD83C\uDF3E"}</div>
+              <div style={{ fontSize: 26, fontWeight: 800, color: E.accent, letterSpacing: -0.5 }}>Agricola Explorer</div>
+              <div style={{ fontSize: 13, color: E.textMuted, marginTop: 4 }}>
+                {activeCards.length} cards in the Norwegian deck
+              </div>
+            </div>
+
+            {/* Menu cards */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 400, margin: "0 auto", width: "100%" }}>
+              {homeItems.map(({ mode, emoji, title, desc, color }) => (
+                <button key={mode} onClick={() => setAppModeWithSidebar(mode)}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 16,
+                    padding: "18px 20px", borderRadius: 14,
+                    border: `1.5px solid ${color}33`,
+                    background: E.surface,
+                    cursor: "pointer", transition: "all 0.15s",
+                    textAlign: "left", width: "100%",
+                    boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+                  }}>
+                  <div style={{
+                    width: 52, height: 52, borderRadius: 12,
+                    background: color + "15",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 28, flexShrink: 0,
+                  }}>{emoji}</div>
+                  <div>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: E.text, lineHeight: 1.2 }}>{title}</div>
+                    <div style={{ fontSize: 12, color: E.textMuted, marginTop: 2 }}>{desc}</div>
+                  </div>
+                  <div style={{ marginLeft: "auto", fontSize: 18, color: E.textDim, flexShrink: 0 }}>{"\u203A"}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div style={{ textAlign: "center", padding: "16px 20px", fontSize: 10, color: E.textDim }}>
+            Agricola NO {"\u00B7"} Norwegian Tournament Companion
+          </div>
+        </div>
+      );
+    }
 
     if (appMode === "drafter" || appMode === "hands" || appMode === "score") {
       return (

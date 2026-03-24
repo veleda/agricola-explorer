@@ -910,7 +910,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, maxWidth: 500, margin: "0 auto" }}>
               {[
                 { mode: "full", emoji: "\uD83C\uDFAF", title: "All Cards Draft", sub: "Pick 7 from packs of 9", detail: "Choose your decks, full customization", hoverColor: T.accent },
-                { mode: "mini", emoji: "\uD83C\uDDF3\uD83C\uDDF4", title: "Mini Draft", sub: "Pick 5 from a fixed deck of 9", detail: "Norway Deck, 100 fixed decks, stats hidden", hoverColor: T.red },
+                { mode: "mini", emoji: "\uD83C\uDDF3\uD83C\uDDF4", title: "Mini Draft", sub: "Pick 5 from a fixed deck of 9", detail: "Norway Deck, 100 fixed decks", hoverColor: T.red },
                 { mode: "fullCombo", emoji: "\uD83C\uDFAF\uD83C\uDFAF", title: "All Cards Full Draft", sub: "Draft 7 occus + 7 minors", detail: "Full game hand — combo across all 14 cards", hoverColor: T.purple },
                 { mode: "miniCombo", emoji: "\uD83C\uDDF3\uD83C\uDDF4\u2728", title: "Mini Full Draft", sub: "Pick 5 occus + 5 minors", detail: "Full mini hand — combo across all 10 cards", hoverColor: T.blue },
               ].map(({ mode, emoji, title, sub, detail, hoverColor }) => (
@@ -1014,7 +1014,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
             {isMini && (
               <div style={{ marginBottom: 24 }}>
                 <label style={{ fontSize: 11, color: T.textMuted, textTransform: "uppercase", letterSpacing: 1, display: "block", marginBottom: 6 }}>
-                  Deck Number (1\u2013100)
+                  Deck Number (1–100)
                 </label>
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                   <input type="number" min={1} max={100} value={miniDeckNumber}
@@ -1050,7 +1050,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
                   <div>
                     <div style={{ fontSize: 12, fontWeight: 600, color: T.text }}>Norway Deck #{miniDeckNumber}</div>
                     <div style={{ fontSize: 11, color: T.textSecondary }}>
-                      Fixed deck \u2014 same 9 cards every time
+                      Fixed deck — same 9 cards every time
                     </div>
                   </div>
                 </div>
@@ -1120,7 +1120,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
                   {draftableCards.length} cards in pool
                   {draftableCards.length < packSize * NUM_PLAYERS && draftableCards.length > 0 && (
                     <span style={{ color: T.accent, marginLeft: 6 }}>
-                      (need at least {packSize * NUM_PLAYERS} cards \u2014 select more decks)
+                      (need at least {packSize * NUM_PLAYERS} cards — select more decks)
                     </span>
                   )}
                 </div>
