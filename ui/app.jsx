@@ -1133,57 +1133,77 @@ export default function App() {
     // ── Mobile home screen ────────────────────────────────────────────
     if (appMode === "home") {
       const homeItems = [
-        { mode: "explorer", emoji: "\uD83D\uDDFA\uFE0F", title: "Card Explorer", desc: `Browse & search ${activeCards.length} cards`, color: E.blue },
-        { mode: "drafter", emoji: "\uD83C\uDCCF", title: "Drafter", desc: "Draft cards against 3 NPCs", color: E.accent },
-        { mode: "hands", emoji: "\uD83E\uDD1D", title: "Community Hands", desc: "Browse drafted hands", color: E.purple || "#7c3aed" },
-        { mode: "score", emoji: "\uD83D\uDCCB", title: "Score Sheet", desc: "Calculate your game score", color: E.green || "#059669" },
+        { mode: "explorer", emoji: "\uD83D\uDDFA\uFE0F", title: "Card Explorer", desc: `Browse & search ${activeCards.length} cards` },
+        { mode: "drafter", emoji: "\uD83C\uDCCF", title: "Drafter", desc: "Draft cards against 3 NPCs" },
+        { mode: "hands", emoji: "\uD83E\uDD1D", title: "Community Hands", desc: "Browse drafted hands" },
+        { mode: "score", emoji: "\uD83D\uDCCB", title: "Score Sheet", desc: "Calculate your game score" },
       ];
       return (
         <div style={{
           display: "flex", flexDirection: "column", height: "100vh",
-          background: E.bg, color: E.textSecondary, fontFamily: "Inter, system-ui, sans-serif",
+          fontFamily: "Inter, system-ui, sans-serif",
+          position: "relative", overflow: "hidden",
         }}>
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", padding: "24px 20px" }}>
+          {/* Background image */}
+          <div style={{
+            position: "absolute", inset: 0, zIndex: 0,
+            backgroundImage: "url(/mobile-bg.png)",
+            backgroundSize: "cover", backgroundPosition: "center top",
+          }} />
+          {/* Dark overlay for readability */}
+          <div style={{
+            position: "absolute", inset: 0, zIndex: 1,
+            background: "linear-gradient(to bottom, rgba(15,23,42,0.45) 0%, rgba(15,23,42,0.7) 50%, rgba(15,23,42,0.92) 100%)",
+          }} />
+
+          {/* Content */}
+          <div style={{ position: "relative", zIndex: 2, flex: 1, display: "flex", flexDirection: "column", justifyContent: "flex-end", padding: "24px 20px 20px" }}>
             {/* Logo / title */}
-            <div style={{ textAlign: "center", marginBottom: 36 }}>
-              <div style={{ fontSize: 48, marginBottom: 8 }}>{"\uD83C\uDF3E"}</div>
-              <div style={{ fontSize: 26, fontWeight: 800, color: E.accent, letterSpacing: -0.5 }}>Agricola Explorer</div>
-              <div style={{ fontSize: 13, color: E.textMuted, marginTop: 4 }}>
+            <div style={{ textAlign: "center", marginBottom: 28 }}>
+              <img src="/agricola-icon-no.png" alt="Agricola" style={{
+                width: 72, height: 72, borderRadius: 16, marginBottom: 10,
+                boxShadow: "0 4px 20px rgba(0,0,0,0.4)",
+              }} />
+              <div style={{ fontSize: 28, fontWeight: 800, color: "#ffffff", letterSpacing: -0.5, textShadow: "0 2px 12px rgba(0,0,0,0.5)" }}>
+                Agricola Explorer
+              </div>
+              <div style={{ fontSize: 13, color: "rgba(255,255,255,0.7)", marginTop: 4, textShadow: "0 1px 4px rgba(0,0,0,0.4)" }}>
                 {activeCards.length} cards in the Norwegian deck
               </div>
             </div>
 
-            {/* Menu cards */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 400, margin: "0 auto", width: "100%" }}>
-              {homeItems.map(({ mode, emoji, title, desc, color }) => (
+            {/* Menu cards — frosted glass style */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, maxWidth: 400, margin: "0 auto", width: "100%" }}>
+              {homeItems.map(({ mode, emoji, title, desc }) => (
                 <button key={mode} onClick={() => setAppModeWithSidebar(mode)}
                   style={{
-                    display: "flex", alignItems: "center", gap: 16,
-                    padding: "18px 20px", borderRadius: 14,
-                    border: `1.5px solid ${color}33`,
-                    background: E.surface,
+                    display: "flex", alignItems: "center", gap: 14,
+                    padding: "16px 18px", borderRadius: 14,
+                    border: "1px solid rgba(255,255,255,0.18)",
+                    background: "rgba(255,255,255,0.12)",
+                    backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)",
                     cursor: "pointer", transition: "all 0.15s",
                     textAlign: "left", width: "100%",
-                    boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+                    boxShadow: "0 2px 12px rgba(0,0,0,0.15)",
                   }}>
                   <div style={{
-                    width: 52, height: 52, borderRadius: 12,
-                    background: color + "15",
+                    width: 48, height: 48, borderRadius: 12,
+                    background: "rgba(255,255,255,0.15)",
                     display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: 28, flexShrink: 0,
+                    fontSize: 26, flexShrink: 0,
                   }}>{emoji}</div>
-                  <div>
-                    <div style={{ fontSize: 16, fontWeight: 700, color: E.text, lineHeight: 1.2 }}>{title}</div>
-                    <div style={{ fontSize: 12, color: E.textMuted, marginTop: 2 }}>{desc}</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: "#ffffff", lineHeight: 1.2 }}>{title}</div>
+                    <div style={{ fontSize: 12, color: "rgba(255,255,255,0.6)", marginTop: 2 }}>{desc}</div>
                   </div>
-                  <div style={{ marginLeft: "auto", fontSize: 18, color: E.textDim, flexShrink: 0 }}>{"\u203A"}</div>
+                  <div style={{ fontSize: 20, color: "rgba(255,255,255,0.4)", flexShrink: 0 }}>{"\u203A"}</div>
                 </button>
               ))}
             </div>
           </div>
 
           {/* Footer */}
-          <div style={{ textAlign: "center", padding: "16px 20px", fontSize: 10, color: E.textDim }}>
+          <div style={{ position: "relative", zIndex: 2, textAlign: "center", padding: "14px 20px", fontSize: 10, color: "rgba(255,255,255,0.4)" }}>
             Agricola NO {"\u00B7"} Norwegian Tournament Companion
           </div>
         </div>
