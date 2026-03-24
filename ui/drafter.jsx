@@ -655,6 +655,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
 
   const [showCommunity, setShowCommunity] = useState(false);
   const [showDraftHand, setShowDraftHand] = useState(false);
+  const [showStats, setShowStats] = useState(true); // player toggle for card stats during draft
 
   // ── Combo draft state (fullCombo / miniCombo) ──────────────────────────
   // comboPhase: 1 = drafting occupations, 2 = drafting minor improvements
@@ -913,7 +914,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
                 { mode: "fullCombo", emoji: "\uD83C\uDFAF\uD83C\uDFAF", title: "All Cards Full Draft", sub: "Draft 7 occus + 7 minors", detail: "Full game hand — combo across all 14 cards", hoverColor: T.purple },
                 { mode: "miniCombo", emoji: "\uD83C\uDDF3\uD83C\uDDF4\u2728", title: "Mini Full Draft", sub: "Pick 5 occus + 5 minors", detail: "Full mini hand — combo across all 10 cards", hoverColor: T.blue },
               ].map(({ mode, emoji, title, sub, detail, hoverColor }) => (
-                <button key={mode} onClick={() => setDrafterMode(mode)}
+                <button key={mode} onClick={() => { setDrafterMode(mode); setShowStats(!mode.startsWith("mini")); }}
                   style={{
                     padding: "24px 16px", borderRadius: 14,
                     border: `2px solid ${T.border}`, background: T.surface, cursor: "pointer",
@@ -1126,6 +1127,34 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
               </div>
             )}
 
+            {/* Show stats toggle */}
+            <div style={{ marginBottom: 20 }}>
+              <label style={{ fontSize: 11, color: T.textMuted, textTransform: "uppercase", letterSpacing: 1, display: "block", marginBottom: 6 }}>
+                Card Stats During Draft
+              </label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={() => setShowStats(true)}
+                  style={{
+                    flex: 1, padding: "10px 14px", borderRadius: 10, border: "1px solid",
+                    borderColor: showStats ? T.green : T.border,
+                    background: showStats ? T.greenLight : T.surface,
+                    color: showStats ? T.green : T.textSecondary,
+                    fontSize: 13, fontWeight: 600, cursor: "pointer", transition: "all 0.15s",
+                  }}>Show Stats</button>
+                <button onClick={() => setShowStats(false)}
+                  style={{
+                    flex: 1, padding: "10px 14px", borderRadius: 10, border: "1px solid",
+                    borderColor: !showStats ? T.accent : T.border,
+                    background: !showStats ? T.accentBg : T.surface,
+                    color: !showStats ? T.accent : T.textSecondary,
+                    fontSize: 13, fontWeight: 600, cursor: "pointer", transition: "all 0.15s",
+                  }}>Hide Stats</button>
+              </div>
+              <div style={{ fontSize: 10, color: T.textMuted, marginTop: 4 }}>
+                {showStats ? "Win rate, PWR, and ADP visible on cards during drafting" : "Stats hidden until draft is complete — for a blind drafting experience"}
+              </div>
+            </div>
+
             {/* Start */}
             <button onClick={startDraft}
               disabled={!canStart}
@@ -1195,6 +1224,17 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
             {currentPack.length} cards remaining
           </div>
           <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
+            <button onClick={() => setShowStats(s => !s)}
+              title={showStats ? "Hide card stats" : "Show card stats"}
+              style={{
+                background: showStats ? T.greenLight : T.surfaceAlt,
+                border: `1px solid ${showStats ? T.green : T.border}`,
+                borderRadius: 8, color: showStats ? T.green : T.textMuted,
+                padding: "4px 10px", fontSize: 11, fontWeight: 600, cursor: "pointer",
+                display: "flex", alignItems: "center", gap: 4,
+              }}>
+              {showStats ? "\uD83D\uDCCA" : "\uD83D\uDE48"} Stats
+            </button>
             {(myPicks.length > 0 || occPicks.length > 0) && (
               <button onClick={() => setShowDraftHand(s => !s)}
                 style={{
@@ -1279,7 +1319,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
                 const c = allCards.find(x => x.id === id);
                 if (!c) return null;
                 const src = cardImgSrc(c);
-                const pop = isMini ? lastPickPopularity[id] : null;
+                const pop = !showStats ? lastPickPopularity[id] : null;
                 return (
                   <div key={id} style={{
                     borderRadius: 6, overflow: "hidden", border: `1px solid ${T.border}`,
@@ -1305,7 +1345,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
                       <div style={{ fontSize: 10, fontWeight: 600, color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {c.name}
                       </div>
-                      {isMini && pop != null && (
+                      {!showStats && pop != null && (
                         <div style={{ fontSize: 9, color: T.blue }}>{pop}% drafted this</div>
                       )}
                     </div>
@@ -1319,7 +1359,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
         {/* Card grid */}
         <div style={{ flex: 1, overflow: "auto", padding: 16 }}>
           <div style={{ textAlign: "center", marginBottom: 12, color: T.textSecondary, fontSize: 13 }}>
-            {isMini ? "Pick a card (stats hidden until draft complete):" : "Choose a card from this pack:"}
+            {!showStats ? "Pick a card (stats hidden until draft complete):" : "Choose a card from this pack:"}
           </div>
           <div style={{
             display: "grid",
@@ -1328,8 +1368,8 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
           }}>
             {currentPack.map(card => (
               <DraftCard key={card.id} card={card} onPick={handlePick} disabled={false}
-                hideStats={isMini}
-                pickPopularity={isMini ? (popularityMap[card.id] ?? null) : null}
+                hideStats={!showStats}
+                pickPopularity={!showStats ? (popularityMap[card.id] ?? null) : null}
               />
             ))}
           </div>
