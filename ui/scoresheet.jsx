@@ -1,6 +1,55 @@
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import Tesseract from "tesseract.js";
 
 const API_BASE = "";
+
+// ── Fuzzy matching helpers ──────────────────────────────────────────────────
+function normalizeStr(s) {
+  return s.toLowerCase().replace(/[^a-z0-9\u00c0-\u017f]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/** Simple bigram similarity (Dice coefficient) */
+function bigramSimilarity(a, b) {
+  const na = normalizeStr(a), nb = normalizeStr(b);
+  if (!na || !nb) return 0;
+  if (na === nb) return 1;
+  const bigrams = (s) => { const bg = []; for (let i = 0; i < s.length - 1; i++) bg.push(s.slice(i, i + 2)); return bg; };
+  const aB = bigrams(na), bB = bigrams(nb);
+  const bSet = new Set(bB);
+  let matches = 0;
+  for (const g of aB) if (bSet.has(g)) matches++;
+  return (2 * matches) / (aB.length + bB.length);
+}
+
+/** Match OCR text lines against card names, return best candidates */
+function matchOcrToCards(ocrText, allCards) {
+  // Split into lines and also try multi-word chunks
+  const raw = ocrText.split(/\n/).map(l => l.trim()).filter(l => l.length >= 3);
+  const taggedIds = new Set();
+  const results = [];
+
+  for (const line of raw) {
+    let bestCard = null, bestScore = 0;
+    for (const card of allCards) {
+      const sim = bigramSimilarity(line, card.name);
+      // Also check if the card name is contained in the line or vice versa
+      const nl = normalizeStr(line), nc = normalizeStr(card.name);
+      const containsBonus = nl.includes(nc) || nc.includes(nl) ? 0.15 : 0;
+      const total = sim + containsBonus;
+      if (total > bestScore) {
+        bestScore = total;
+        bestCard = card;
+      }
+    }
+    if (bestCard && bestScore >= 0.35 && !taggedIds.has(bestCard.id)) {
+      taggedIds.add(bestCard.id);
+      results.push({ card: bestCard, ocrLine: line, confidence: Math.min(bestScore, 1) });
+    }
+  }
+  // Sort by confidence descending
+  results.sort((a, b) => b.confidence - a.confidence);
+  return results;
+}
 
 // ── Responsive hook ──────────────────────────────────────────────────────────
 function useIsMobile(breakpoint = 600) {
@@ -336,7 +385,7 @@ function StepperBtn({ direction, onClick }) {
 }
 
 // ── Main component ───────────────────────────────────────────────────────────
-export default function ScoreSheet() {
+export default function ScoreSheet({ allCards = [] }) {
   const isMobile = useIsMobile();
   const [name, setName] = useState("");
   const [tournament, setTournament] = useState("");
@@ -348,6 +397,103 @@ export default function ScoreSheet() {
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState(null); // {type: "ok"|"err", text}
   const [showBrowser, setShowBrowser] = useState(false);
+
+  // ── Card log state ──────────────────────────────────────────────────────
+  const [showCardLog, setShowCardLog] = useState(false);
+  const [cardSearch, setCardSearch] = useState("");
+  const [taggedCards, setTaggedCards] = useState([]); // [{id, name, type, played, order, round, comment}]
+
+  const cardSearchResults = useMemo(() => {
+    if (!cardSearch.trim() || cardSearch.length < 2) return [];
+    const q = cardSearch.toLowerCase();
+    const taggedIds = new Set(taggedCards.map(c => c.id));
+    return allCards
+      .filter(c => !taggedIds.has(c.id) && c.name.toLowerCase().includes(q))
+      .slice(0, 8);
+  }, [cardSearch, allCards, taggedCards]);
+
+  const addCardToLog = useCallback((card) => {
+    setTaggedCards(prev => [...prev, {
+      id: card.id, name: card.name, type: card.type || "",
+      played: false, order: null, round: null, comment: "",
+    }]);
+    setCardSearch("");
+  }, []);
+
+  const removeCardFromLog = useCallback((cardId) => {
+    setTaggedCards(prev => prev.filter(c => c.id !== cardId));
+  }, []);
+
+  const updateTaggedCard = useCallback((cardId, field, value) => {
+    setTaggedCards(prev => prev.map(c => c.id === cardId ? { ...c, [field]: value } : c));
+  }, []);
+
+  // ── OCR / camera state ───────────────────────────────────────────────
+  const fileInputRef = useRef(null);
+  const [ocrBusy, setOcrBusy] = useState(false);
+  const [ocrProgress, setOcrProgress] = useState("");
+  const [ocrResults, setOcrResults] = useState(null); // [{card, ocrLine, confidence, selected, correctedCard}]
+
+  const handlePhotoCapture = useCallback(async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setOcrBusy(true);
+    setOcrProgress("Starting OCR...");
+    try {
+      const result = await Tesseract.recognize(file, "eng", {
+        logger: (m) => {
+          if (m.status === "recognizing text") {
+            setOcrProgress(`Reading text... ${Math.round((m.progress || 0) * 100)}%`);
+          }
+        },
+      });
+      setOcrProgress("Matching cards...");
+      const matches = matchOcrToCards(result.data.text, allCards);
+      // Pre-select matches with decent confidence
+      setOcrResults(matches.map(m => ({
+        ...m,
+        selected: m.confidence >= 0.45,
+        correctedCard: null, // user override
+        searchText: "",       // for inline correction search
+      })));
+      setOcrProgress("");
+    } catch (err) {
+      console.error("OCR failed:", err);
+      setOcrProgress("OCR failed — try a clearer photo");
+      setTimeout(() => setOcrProgress(""), 3000);
+    } finally {
+      setOcrBusy(false);
+      // Reset file input so same file can be re-selected
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }, [allCards]);
+
+  const updateOcrResult = useCallback((idx, field, value) => {
+    setOcrResults(prev => prev.map((r, i) => i === idx ? { ...r, [field]: value } : r));
+  }, []);
+
+  const ocrCorrectionResults = useCallback((searchText) => {
+    if (!searchText || searchText.length < 2) return [];
+    const q = searchText.toLowerCase();
+    return allCards.filter(c => c.name.toLowerCase().includes(q)).slice(0, 6);
+  }, [allCards]);
+
+  const confirmOcrResults = useCallback(() => {
+    if (!ocrResults) return;
+    const taggedIds = new Set(taggedCards.map(c => c.id));
+    const toAdd = ocrResults
+      .filter(r => r.selected)
+      .map(r => r.correctedCard || r.card)
+      .filter(c => !taggedIds.has(c.id));
+    setTaggedCards(prev => [
+      ...prev,
+      ...toAdd.map(c => ({
+        id: c.id, name: c.name, type: c.type || "",
+        played: false, order: null, round: null, comment: "",
+      })),
+    ]);
+    setOcrResults(null);
+  }, [ocrResults, taggedCards]);
 
   const setValue = useCallback((key, raw) => {
     if (raw === "") {
@@ -410,6 +556,12 @@ export default function ScoreSheet() {
     setTableNumber("");
     setGameNumber("");
     setStartingPosition("");
+    setTaggedCards([]);
+    setCardSearch("");
+    setShowCardLog(false);
+    setOcrResults(null);
+    setOcrBusy(false);
+    setOcrProgress("");
     setSaveMsg(null);
   }, []);
 
@@ -434,6 +586,7 @@ export default function ScoreSheet() {
         values,
         points,
         total,
+        cardLog: taggedCards.length > 0 ? taggedCards : null,
       };
       const res = await saveScore(payload);
       if (res.error) {
@@ -446,7 +599,7 @@ export default function ScoreSheet() {
     } finally {
       setSaving(false);
     }
-  }, [name, tournament, tableNumber, gameNumber, startingPosition, values, points, total]);
+  }, [name, tournament, tableNumber, gameNumber, startingPosition, values, points, total, taggedCards]);
 
   // Group categories
   const grouped = useMemo(() => {
@@ -748,6 +901,325 @@ export default function ScoreSheet() {
           }}>
             {total === null ? "—" : total}
           </div>
+        </div>
+
+        {/* ── Card Log ────────────────────────────────────────────────── */}
+        <div style={{ marginTop: 24, borderTop: `1px solid ${T.border}`, paddingTop: 16 }}>
+          <button onClick={() => setShowCardLog(s => !s)}
+            style={{
+              width: "100%", padding: "10px 14px", borderRadius: 10,
+              border: `1px solid ${showCardLog ? T.purple + "44" : T.border}`,
+              background: showCardLog ? T.purple + "0a" : T.surface,
+              color: showCardLog ? T.purple : T.textSecondary,
+              fontSize: 13, fontWeight: 600, cursor: "pointer",
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+            }}>
+            <span style={{ fontSize: 16 }}>{"\uD83C\uDCCF"}</span>
+            Card Log {taggedCards.length > 0 ? `(${taggedCards.length})` : ""}
+            <span style={{ fontSize: 12, marginLeft: 4 }}>{showCardLog ? "\u25B2" : "\u25BC"}</span>
+          </button>
+
+          {showCardLog && (
+            <div style={{ marginTop: 12 }}>
+              {/* Search input + camera button */}
+              <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                <div style={{ position: "relative", flex: 1 }}>
+                  <input
+                    type="text"
+                    value={cardSearch}
+                    onChange={e => setCardSearch(e.target.value)}
+                    placeholder="Search for a card..."
+                    style={{
+                      width: "100%", padding: "10px 14px", borderRadius: 8,
+                      border: `1px solid ${T.border}`, background: T.surface,
+                      fontSize: 13, color: T.text, outline: "none", boxSizing: "border-box",
+                    }}
+                    onFocus={e => e.target.style.borderColor = T.purple}
+                    onBlur={e => { setTimeout(() => e.target.style.borderColor = T.border, 200); }}
+                  />
+                {/* Search results dropdown */}
+                {cardSearchResults.length > 0 && (
+                  <div style={{
+                    position: "absolute", top: "100%", left: 0, right: 0, zIndex: 10,
+                    background: T.surface, border: `1px solid ${T.border}`, borderRadius: 8,
+                    boxShadow: "0 4px 16px rgba(0,0,0,0.1)", marginTop: 4, overflow: "hidden",
+                  }}>
+                    {cardSearchResults.map(c => (
+                      <button key={c.id}
+                        onMouseDown={(e) => { e.preventDefault(); addCardToLog(c); }}
+                        style={{
+                          width: "100%", padding: "8px 14px", border: "none",
+                          background: "transparent", cursor: "pointer",
+                          display: "flex", alignItems: "center", gap: 8,
+                          textAlign: "left", fontSize: 13, color: T.text,
+                        }}
+                        onMouseEnter={e => e.currentTarget.style.background = T.surfaceAlt}
+                        onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                      >
+                        <span style={{ fontSize: 14 }}>
+                          {c.type === "Occupation" ? "\uD83D\uDC64" : "\uD83D\uDD27"}
+                        </span>
+                        <span style={{ fontWeight: 500 }}>{c.name}</span>
+                        <span style={{ fontSize: 10, color: T.textMuted, marginLeft: "auto" }}>{c.deck}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                </div>
+
+                {/* Camera / photo button */}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={handlePhotoCapture}
+                  style={{ display: "none" }}
+                />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={ocrBusy}
+                  title="Take a photo of your cards"
+                  style={{
+                    width: 44, height: 44, flexShrink: 0, borderRadius: 8,
+                    border: `1px solid ${T.purple + "44"}`,
+                    background: T.purple + "0a",
+                    color: T.purple, fontSize: 20,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    cursor: ocrBusy ? "wait" : "pointer",
+                    opacity: ocrBusy ? 0.5 : 1,
+                  }}>
+                  {"\uD83D\uDCF7"}
+                </button>
+              </div>
+
+              {/* OCR progress indicator */}
+              {ocrBusy && (
+                <div style={{
+                  textAlign: "center", padding: "10px 0", fontSize: 12,
+                  color: T.purple, fontWeight: 500,
+                }}>
+                  {ocrProgress || "Processing..."}
+                </div>
+              )}
+
+              {/* OCR results review modal */}
+              {ocrResults && !ocrBusy && (
+                <div style={{
+                  padding: 14, borderRadius: 10, marginBottom: 12,
+                  border: `1.5px solid ${T.purple + "44"}`,
+                  background: T.purple + "06",
+                }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: T.purple, marginBottom: 8 }}>
+                    {"\uD83D\uDCF7"} Recognized Cards
+                  </div>
+                  {ocrResults.length === 0 ? (
+                    <div style={{ fontSize: 12, color: T.textMuted, padding: "8px 0" }}>
+                      No cards recognized. Try a clearer photo with card names visible.
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {ocrResults.map((r, idx) => {
+                        const displayCard = r.correctedCard || r.card;
+                        const confPct = Math.round(r.confidence * 100);
+                        return (
+                          <div key={idx} style={{
+                            padding: "8px 10px", borderRadius: 8,
+                            background: r.selected ? T.surface : T.surfaceAlt,
+                            border: `1px solid ${r.selected ? T.purple + "44" : T.border}`,
+                            opacity: r.selected ? 1 : 0.6,
+                          }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              {/* Checkbox */}
+                              <input type="checkbox" checked={r.selected}
+                                onChange={e => updateOcrResult(idx, "selected", e.target.checked)}
+                                style={{ accentColor: T.purple, flexShrink: 0 }}
+                              />
+                              {/* Card info */}
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontSize: 13, fontWeight: 600, color: T.text }}>
+                                  {displayCard.type === "Occupation" ? "\uD83D\uDC64" : "\uD83D\uDD27"} {displayCard.name}
+                                </div>
+                                <div style={{ fontSize: 10, color: T.textMuted, marginTop: 1 }}>
+                                  Read: "{r.ocrLine}" · {confPct}% match
+                                </div>
+                              </div>
+                              {/* Confidence indicator */}
+                              <div style={{
+                                fontSize: 10, fontWeight: 700, padding: "2px 6px", borderRadius: 4,
+                                background: confPct >= 70 ? T.greenLight : confPct >= 50 ? T.accentLight : "#fef2f2",
+                                color: confPct >= 70 ? T.green : confPct >= 50 ? T.accent : T.red,
+                              }}>
+                                {confPct >= 70 ? "\u2713" : confPct >= 50 ? "?" : "!"}
+                              </div>
+                            </div>
+                            {/* Inline correction: small search to swap the card */}
+                            <div style={{ marginTop: 6 }}>
+                              <input
+                                type="text"
+                                value={r.searchText || ""}
+                                onChange={e => updateOcrResult(idx, "searchText", e.target.value)}
+                                placeholder="Wrong card? Type to correct..."
+                                style={{
+                                  width: "100%", padding: "5px 10px", borderRadius: 6,
+                                  border: `1px solid ${T.border}`, background: T.bg,
+                                  fontSize: 11, color: T.text, outline: "none", boxSizing: "border-box",
+                                }}
+                              />
+                              {r.searchText && r.searchText.length >= 2 && (
+                                <div style={{
+                                  marginTop: 2, background: T.surface, border: `1px solid ${T.border}`,
+                                  borderRadius: 6, overflow: "hidden", maxHeight: 150, overflowY: "auto",
+                                }}>
+                                  {ocrCorrectionResults(r.searchText).map(c => (
+                                    <button key={c.id}
+                                      onClick={() => {
+                                        updateOcrResult(idx, "correctedCard", c);
+                                        updateOcrResult(idx, "searchText", "");
+                                        updateOcrResult(idx, "selected", true);
+                                      }}
+                                      style={{
+                                        width: "100%", padding: "6px 10px", border: "none",
+                                        background: "transparent", cursor: "pointer",
+                                        display: "flex", alignItems: "center", gap: 6,
+                                        textAlign: "left", fontSize: 12, color: T.text,
+                                      }}
+                                      onMouseEnter={e => e.currentTarget.style.background = T.surfaceAlt}
+                                      onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                                    >
+                                      <span>{c.type === "Occupation" ? "\uD83D\uDC64" : "\uD83D\uDD27"}</span>
+                                      <span style={{ fontWeight: 500 }}>{c.name}</span>
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Confirm / Cancel buttons */}
+                  <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                    <button onClick={confirmOcrResults}
+                      disabled={!ocrResults.some(r => r.selected)}
+                      style={{
+                        flex: 1, padding: "8px 0", borderRadius: 8, border: "none",
+                        background: T.purple, color: "#fff", fontSize: 13, fontWeight: 600,
+                        cursor: "pointer", opacity: ocrResults.some(r => r.selected) ? 1 : 0.5,
+                      }}>
+                      Add {ocrResults.filter(r => r.selected).length} card{ocrResults.filter(r => r.selected).length !== 1 ? "s" : ""}
+                    </button>
+                    <button onClick={() => setOcrResults(null)}
+                      style={{
+                        padding: "8px 16px", borderRadius: 8,
+                        border: `1px solid ${T.border}`, background: T.surface,
+                        color: T.textSecondary, fontSize: 13, cursor: "pointer",
+                      }}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Tagged cards list */}
+              {taggedCards.length === 0 ? (
+                <div style={{ textAlign: "center", padding: 16, color: T.textMuted, fontSize: 12 }}>
+                  Search and add the cards you picked in this game.
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {taggedCards.map((card, idx) => (
+                    <div key={card.id} style={{
+                      padding: "10px 12px", borderRadius: 10,
+                      border: `1px solid ${card.played ? T.green + "44" : T.border}`,
+                      background: card.played ? T.greenLight : T.surface,
+                    }}>
+                      {/* Card header row */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                        <span style={{ fontSize: 14 }}>
+                          {card.type === "Occupation" ? "\uD83D\uDC64" : "\uD83D\uDD27"}
+                        </span>
+                        <span style={{ fontSize: 13, fontWeight: 600, color: T.text, flex: 1 }}>{card.name}</span>
+                        <button onClick={() => removeCardFromLog(card.id)}
+                          style={{
+                            background: "none", border: "none", fontSize: 14,
+                            color: T.textMuted, cursor: "pointer", padding: "2px 6px",
+                          }}>{"\u2715"}</button>
+                      </div>
+
+                      {/* Controls row */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        {/* Played toggle */}
+                        <button onClick={() => updateTaggedCard(card.id, "played", !card.played)}
+                          style={{
+                            padding: "4px 12px", borderRadius: 6,
+                            border: `1px solid ${card.played ? T.green : T.border}`,
+                            background: card.played ? T.green : T.surface,
+                            color: card.played ? "#fff" : T.textMuted,
+                            fontSize: 11, fontWeight: 600, cursor: "pointer",
+                          }}>
+                          {card.played ? "\u2713 Played" : "Not played"}
+                        </button>
+
+                        {/* Order */}
+                        {card.played && (
+                          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                            <span style={{ fontSize: 10, color: T.textMuted }}>Order:</span>
+                            <input type="number" min={1} max={20}
+                              value={card.order || ""}
+                              onChange={e => updateTaggedCard(card.id, "order", e.target.value ? parseInt(e.target.value) : null)}
+                              style={{
+                                width: 44, padding: "3px 6px", borderRadius: 6,
+                                border: `1px solid ${T.border}`, background: T.surface,
+                                fontSize: 12, color: T.text, textAlign: "center", outline: "none",
+                              }}
+                            />
+                          </div>
+                        )}
+
+                        {/* Round */}
+                        {card.played && (
+                          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                            <span style={{ fontSize: 10, color: T.textMuted }}>Round:</span>
+                            <input type="number" min={1} max={14}
+                              value={card.round || ""}
+                              onChange={e => updateTaggedCard(card.id, "round", e.target.value ? parseInt(e.target.value) : null)}
+                              style={{
+                                width: 44, padding: "3px 6px", borderRadius: 6,
+                                border: `1px solid ${T.border}`, background: T.surface,
+                                fontSize: 12, color: T.text, textAlign: "center", outline: "none",
+                              }}
+                            />
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Comment */}
+                      {card.played && (
+                        <input type="text"
+                          value={card.comment}
+                          onChange={e => updateTaggedCard(card.id, "comment", e.target.value)}
+                          placeholder="Note (optional)..."
+                          style={{
+                            width: "100%", marginTop: 6, padding: "5px 10px", borderRadius: 6,
+                            border: `1px solid ${T.border}`, background: T.surface,
+                            fontSize: 11, color: T.text, outline: "none", boxSizing: "border-box",
+                          }}
+                        />
+                      )}
+                    </div>
+                  ))}
+
+                  {/* Summary */}
+                  <div style={{ fontSize: 11, color: T.textMuted, textAlign: "center", marginTop: 4 }}>
+                    {taggedCards.filter(c => c.played).length} of {taggedCards.length} cards played
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* ── Save + Reset + Browse buttons ───────────────────────────── */}

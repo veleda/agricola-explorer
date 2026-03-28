@@ -281,6 +281,12 @@ def _get_db() -> sqlite3.Connection:
             timestamp    TEXT NOT NULL
         )
     """)
+    # Migration: add startingPosition and cardLog columns to scores if missing
+    score_cols = {row[1] for row in conn.execute("PRAGMA table_info(scores)").fetchall()}
+    if "startingPosition" not in score_cols:
+        conn.execute("ALTER TABLE scores ADD COLUMN startingPosition TEXT")
+    if "cardLog" not in score_cols:
+        conn.execute("ALTER TABLE scores ADD COLUMN cardLog TEXT")
     conn.commit()
     return conn
 
@@ -568,9 +574,11 @@ class ScoreSaveRequest(BaseModel):
     tournament: Optional[str] = None
     tableNumber: Optional[str] = None
     gameNumber: Optional[str] = None
+    startingPosition: Optional[str] = None  # "1st", "2nd", etc.
     values: dict          # {fields: 3, pastures: 1, ...}
     points: dict          # {fields: 2, pastures: 1, ...}
     total: int
+    cardLog: Optional[list] = None  # [{id, name, type, played, order, round, comment}]
 
 @app.post("/api/scores")
 def save_score(req: ScoreSaveRequest):
@@ -580,15 +588,18 @@ def save_score(req: ScoreSaveRequest):
     score_id = hashlib.md5(f"{req.name}{time.time()}".encode()).hexdigest()[:12]
     ts = datetime.datetime.utcnow().isoformat() + "Z"
 
+    card_log_json = json.dumps(req.cardLog) if req.cardLog else None
+
     conn = _get_db()
     conn.execute(
-        "INSERT INTO scores (id, name, tournament, tableNumber, gameNumber, valuesJson, pointsJson, total, timestamp) VALUES (?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO scores (id, name, tournament, tableNumber, gameNumber, startingPosition, valuesJson, pointsJson, total, timestamp, cardLog) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         (score_id, req.name.strip(),
          (req.tournament or "").strip() or None,
          (req.tableNumber or "").strip() or None,
          (req.gameNumber or "").strip() or None,
+         (req.startingPosition or "").strip() or None,
          json.dumps(req.values), json.dumps(req.points),
-         req.total, ts),
+         req.total, ts, card_log_json),
     )
     conn.commit()
     conn.close()
@@ -622,6 +633,7 @@ def list_scores(q: str = "", page: int = 1, pageSize: int = 20):
         d = dict(row)
         d["values"] = json.loads(d.pop("valuesJson"))
         d["points"] = json.loads(d.pop("pointsJson"))
+        d["cardLog"] = json.loads(d["cardLog"]) if d.get("cardLog") else None
         scores.append(d)
 
     conn.close()

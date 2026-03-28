@@ -1225,7 +1225,7 @@ export default function App() {
               ? <Drafter allCards={activeCards} norwayOnly={norwayOnly} setNorwayOnly={setNorwayOnly} onViewHands={(dt) => setAppModeWithSidebar("hands", { draftType: dt })} />
               : appMode === "hands"
               ? <CommunityHands allCards={allCards} initialDraftType={handsDraftType} />
-              : <ScoreSheet />
+              : <ScoreSheet allCards={activeCards} />
             }
           </div>
         </div>
@@ -1409,7 +1409,7 @@ export default function App() {
         </div>
       ) : appMode === "score" ? (
         <div style={{ flex: 1, overflow: "hidden" }}>
-          <ScoreSheet />
+          <ScoreSheet allCards={activeCards} />
         </div>
       ) : (
       <>
