@@ -657,6 +657,9 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
   const [showDraftHand, setShowDraftHand] = useState(false);
   const [showStats, setShowStats] = useState(true); // player toggle for card stats during draft
 
+  // Undo: snapshot of the state before the last pick (one step only)
+  const [undoSnapshot, setUndoSnapshot] = useState(null);
+
   // ── Combo draft state (fullCombo / miniCombo) ──────────────────────────
   // comboPhase: 1 = drafting occupations, 2 = drafting minor improvements
   const [comboPhase, setComboPhase] = useState(1);
@@ -781,12 +784,33 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
     setRound(1);
     setSaved(false);
     setLastPickPopularity({});
+    setUndoSnapshot(null);
     setPhase("drafting");
   }, [canStart, isMini, isCombo, draftableCards, initPacks]);
+
+  const handleUndo = useCallback(() => {
+    if (!undoSnapshot) return;
+    setPacks(undoSnapshot.packs);
+    setMyPicks(undoSnapshot.myPicks);
+    setPickOrder(undoSnapshot.pickOrder);
+    setRound(undoSnapshot.round);
+    setLastPickPopularity(undoSnapshot.lastPickPopularity);
+    setUndoSnapshot(null); // only one step back
+  }, [undoSnapshot]);
 
   const handlePick = useCallback((card) => {
     const currentPack = packs[0];
     if (!currentPack.find(c => c.id === card.id)) return;
+
+    // Save snapshot for undo (one level only)
+    setUndoSnapshot({
+      packs: packs.map(p => [...p]),
+      myPicks: [...myPicks],
+      pickOrder: [...pickOrder],
+      round,
+      lastPickPopularity: { ...lastPickPopularity },
+    });
+
     const newPicks = [...myPicks, card.id];
     const newPickOrder = [...pickOrder, round];
 
@@ -820,6 +844,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
         setPickOrder([]);
         setRound(1);
         setLastPickPopularity({});
+        setUndoSnapshot(null);
         // Build new packs for minor improvements
         if (isMini) {
           // For mini combo: use same deck number but from minor decks
@@ -849,7 +874,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
     } else {
       setRound(round + 1);
     }
-  }, [packs, myPicks, pickOrder, round, maxPicks, isMini, isCombo, comboPhase, popularityMap, miniDeckNumber, allCards, selectedDecks, availableDecks, packSize]);
+  }, [packs, myPicks, pickOrder, round, maxPicks, isMini, isCombo, comboPhase, popularityMap, miniDeckNumber, allCards, selectedDecks, availableDecks, packSize, lastPickPopularity]);
 
   const handleSave = useCallback(async (combos) => {
     if (saving) return;
@@ -1224,6 +1249,18 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
             {currentPack.length} cards remaining
           </div>
           <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
+            {undoSnapshot && (
+              <button onClick={handleUndo}
+                title="Undo last pick"
+                style={{
+                  background: "#fef2f2", border: `1px solid ${T.red}44`,
+                  borderRadius: 8, color: T.red,
+                  padding: "4px 10px", fontSize: 11, fontWeight: 600, cursor: "pointer",
+                  display: "flex", alignItems: "center", gap: 4,
+                }}>
+                {"\u21A9"} Undo
+              </button>
+            )}
             <button onClick={() => setShowStats(s => !s)}
               title={showStats ? "Hide card stats" : "Show card stats"}
               style={{
