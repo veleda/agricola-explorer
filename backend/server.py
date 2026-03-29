@@ -641,6 +641,27 @@ def list_scores(q: str = "", page: int = 1, pageSize: int = 20):
     return {"scores": scores, "total": total, "page": page, "pageSize": pageSize}
 
 
+class ScoreDeleteRequest(BaseModel):
+    confirmName: str  # must match the player name on the score
+
+@app.delete("/api/scores/{score_id}")
+def delete_score(score_id: str, req: ScoreDeleteRequest):
+    conn = _get_db()
+    row = conn.execute("SELECT name FROM scores WHERE id = ?", (score_id,)).fetchone()
+    if not row:
+        conn.close()
+        return JSONResponse(status_code=404, content={"error": "Score not found"})
+
+    if req.confirmName.strip().lower() != row["name"].strip().lower():
+        conn.close()
+        return JSONResponse(status_code=403, content={"error": "Player name does not match"})
+
+    conn.execute("DELETE FROM scores WHERE id = ?", (score_id,))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
 # ── Card OCR via Claude Vision ────────────────────────────────────────────────
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")

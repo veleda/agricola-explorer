@@ -124,6 +124,19 @@ async function searchScores(q, page = 1) {
   return res.json();
 }
 
+async function deleteScore(scoreId, confirmName) {
+  const res = await fetch(`${API_BASE}/api/scores/${scoreId}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ confirmName }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Delete failed");
+  }
+  return res.json();
+}
+
 // ── Points badge ─────────────────────────────────────────────────────────────
 function PointsBadge({ pts }) {
   if (pts === null) return (
@@ -152,6 +165,10 @@ function ScoreBrowser({ onClose }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
   const [totalCount, setTotalCount] = useState(0);
+  const [deleteConfirm, setDeleteConfirm] = useState(null); // { scoreId, scoreName } or null
+  const [deleteInput, setDeleteInput] = useState("");
+  const [deleteError, setDeleteError] = useState("");
+  const [deleting, setDeleting] = useState(false);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState(null);
@@ -172,6 +189,23 @@ function ScoreBrowser({ onClose }) {
 
   // Load on mount
   useEffect(() => { doSearch("", 1); }, [doSearch]);
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteConfirm) return;
+    setDeleteError("");
+    setDeleting(true);
+    try {
+      await deleteScore(deleteConfirm.scoreId, deleteInput);
+      setDeleteConfirm(null);
+      setDeleteInput("");
+      // Refresh the list
+      doSearch(query, page);
+    } catch (err) {
+      setDeleteError(err.message);
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   const handleSearch = (e) => {
     e.preventDefault();
@@ -324,6 +358,57 @@ function ScoreBrowser({ onClose }) {
                       </div>
                     </div>
                   )}
+
+                  {/* Delete button */}
+                  <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${T.borderLight}`, display: "flex", justifyContent: "flex-end" }}>
+                    {deleteConfirm?.scoreId === score.id ? (
+                      <div style={{ width: "100%" }}>
+                        <div style={{ fontSize: 12, color: T.red, fontWeight: 600, marginBottom: 6 }}>
+                          Type the player name "{score.name}" to confirm deletion:
+                        </div>
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          <input
+                            type="text" value={deleteInput}
+                            onChange={e => { setDeleteInput(e.target.value); setDeleteError(""); }}
+                            placeholder={score.name}
+                            autoFocus
+                            style={{
+                              flex: 1, padding: "6px 10px", borderRadius: 6,
+                              border: `1.5px solid ${deleteError ? T.red : T.border}`,
+                              background: T.bg, fontSize: 12, color: T.text, outline: "none",
+                            }}
+                            onKeyDown={e => { if (e.key === "Enter") handleDeleteConfirm(); }}
+                          />
+                          <button onClick={handleDeleteConfirm} disabled={deleting || !deleteInput.trim()}
+                            style={{
+                              padding: "6px 12px", borderRadius: 6, border: "none",
+                              background: T.red, color: "#fff", fontSize: 12, fontWeight: 600,
+                              cursor: deleting || !deleteInput.trim() ? "default" : "pointer",
+                              opacity: deleting || !deleteInput.trim() ? 0.5 : 1,
+                            }}>{deleting ? "..." : "Delete"}</button>
+                          <button onClick={() => { setDeleteConfirm(null); setDeleteInput(""); setDeleteError(""); }}
+                            style={{
+                              padding: "6px 10px", borderRadius: 6, border: `1px solid ${T.border}`,
+                              background: "transparent", color: T.textMuted, fontSize: 12,
+                              cursor: "pointer",
+                            }}>Cancel</button>
+                        </div>
+                        {deleteError && (
+                          <div style={{ fontSize: 11, color: T.red, marginTop: 4 }}>{deleteError}</div>
+                        )}
+                      </div>
+                    ) : (
+                      <button onClick={() => setDeleteConfirm({ scoreId: score.id, scoreName: score.name })}
+                        style={{
+                          padding: "5px 12px", borderRadius: 6, border: `1px solid ${T.red}33`,
+                          background: "transparent", color: T.red, fontSize: 11,
+                          cursor: "pointer", opacity: 0.7,
+                        }}
+                        onMouseEnter={e => e.currentTarget.style.opacity = 1}
+                        onMouseLeave={e => e.currentTarget.style.opacity = 0.7}
+                      >Delete score</button>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -827,12 +912,24 @@ export default function ScoreSheet({ allCards = [] }) {
                         <div style={{ fontSize: 13, fontWeight: 700, color: T.text, lineHeight: 1.1 }}>{cat.label}</div>
                         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                           <StepperBtn direction="minus" onClick={() => stepValue(cat.key, -1)} />
-                          <div style={{
-                            minWidth: 36, textAlign: "center",
-                            fontSize: 24, fontWeight: 800, color: T.text, lineHeight: 1,
-                          }}>
-                            {values[cat.key] ?? 0}
-                          </div>
+                          <input
+                            type="text" inputMode="numeric" pattern="[0-9]*"
+                            value={values[cat.key] ?? ""}
+                            onChange={e => {
+                              const v = e.target.value.replace(/[^0-9]/g, "");
+                              setValue(cat.key, v);
+                            }}
+                            placeholder="0"
+                            style={{
+                              width: 48, minWidth: 36, textAlign: "center",
+                              fontSize: 24, fontWeight: 800, color: T.text, lineHeight: 1,
+                              border: "none", borderBottom: `2px solid transparent`,
+                              background: "transparent", outline: "none",
+                              padding: "2px 0", borderRadius: 0,
+                            }}
+                            onFocus={e => { e.target.style.borderBottomColor = T.accent; e.target.select(); }}
+                            onBlur={e => e.target.style.borderBottomColor = "transparent"}
+                          />
                           <StepperBtn direction="plus" onClick={() => stepValue(cat.key, 1)} />
                         </div>
                       </div>
@@ -857,28 +954,34 @@ export default function ScoreSheet({ allCards = [] }) {
                       })()}
                     </div>
                   ) : (
-                    /* ── Desktop: inline layout with number input ── */
+                    /* ── Desktop: inline layout with stepper + number input ── */
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       <span style={{ fontSize: 18, flexShrink: 0, width: 24, textAlign: "center" }}>{cat.icon}</span>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 13, fontWeight: 600, color: T.text, lineHeight: 1.2 }}>{cat.label}</div>
                         <div style={{ fontSize: 10, color: T.textMuted, marginTop: 1 }}>{cat.hint}</div>
                       </div>
-                      <input
-                        type="number" min="0" inputMode="numeric"
-                        value={values[cat.key] ?? ""}
-                        onChange={e => setValue(cat.key, e.target.value)}
-                        placeholder="0"
-                        style={{
-                          width: 56, padding: "6px 8px", borderRadius: 8, textAlign: "center",
-                          border: `1.5px solid ${T.border}`, background: T.bg,
-                          fontSize: 15, fontWeight: 600, color: T.text,
-                          outline: "none", transition: "border-color 0.15s",
-                          MozAppearance: "textfield",
-                        }}
-                        onFocus={e => e.target.style.borderColor = T.accent}
-                        onBlur={e => e.target.style.borderColor = T.border}
-                      />
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <StepperBtn direction="minus" onClick={() => stepValue(cat.key, -1)} />
+                        <input
+                          type="text" inputMode="numeric" pattern="[0-9]*"
+                          value={values[cat.key] ?? ""}
+                          onChange={e => {
+                            const v = e.target.value.replace(/[^0-9]/g, "");
+                            setValue(cat.key, v);
+                          }}
+                          placeholder="0"
+                          style={{
+                            width: 48, padding: "6px 4px", borderRadius: 8, textAlign: "center",
+                            border: `1.5px solid ${T.border}`, background: T.bg,
+                            fontSize: 15, fontWeight: 600, color: T.text,
+                            outline: "none", transition: "border-color 0.15s",
+                          }}
+                          onFocus={e => { e.target.style.borderColor = T.accent; e.target.select(); }}
+                          onBlur={e => e.target.style.borderColor = T.border}
+                        />
+                        <StepperBtn direction="plus" onClick={() => stepValue(cat.key, 1)} />
+                      </div>
                       <PointsBadge pts={points[cat.key]} />
                     </div>
                   )}
