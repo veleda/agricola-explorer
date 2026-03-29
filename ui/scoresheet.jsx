@@ -329,6 +329,50 @@ function ScoreBrowser({ onClose }) {
                       );
                     })}
                   </div>
+
+                  {/* Card Log */}
+                  {score.cardLog && score.cardLog.length > 0 && (
+                    <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.borderLight}` }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: T.purple, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                        {"\uD83C\uDCCF"} Card Log ({score.cardLog.length})
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        {score.cardLog.map((card, ci) => (
+                          <div key={ci} style={{
+                            display: "flex", alignItems: "center", gap: 6,
+                            padding: "4px 8px", borderRadius: 6,
+                            background: card.played ? T.greenLight : T.surfaceAlt,
+                            fontSize: 11,
+                          }}>
+                            <span style={{ flexShrink: 0 }}>
+                              {card.type === "Occupation" ? "\uD83D\uDC64" : "\uD83D\uDD27"}
+                            </span>
+                            <span style={{ fontWeight: 600, color: T.text, flex: 1, minWidth: 0 }}>
+                              {card.name}
+                            </span>
+                            {card.played ? (
+                              <span style={{ color: T.green, fontWeight: 600, whiteSpace: "nowrap" }}>
+                                {"\u2713"}
+                                {card.round ? ` R${card.round}` : ""}
+                                {card.order ? ` #${card.order}` : ""}
+                              </span>
+                            ) : (
+                              <span style={{ color: T.textMuted, fontSize: 10 }}>not played</span>
+                            )}
+                            {card.comment && (
+                              <span style={{ color: T.textMuted, fontSize: 10, fontStyle: "italic", maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                                title={card.comment}>
+                                {card.comment}
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{ fontSize: 10, color: T.textMuted, marginTop: 4 }}>
+                        {score.cardLog.filter(c => c.played).length} of {score.cardLog.length} played
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
