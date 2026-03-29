@@ -21,8 +21,8 @@ function bigramSimilarity(a, b) {
   return (2 * matches) / (aB.length + bB.length);
 }
 
-/** Match OCR text lines against card names, return best candidates */
-function matchOcrToCards(ocrText, allCards) {
+/** Match OCR text lines against card names, return top maxCards candidates */
+function matchOcrToCards(ocrText, allCards, maxCards = 7) {
   // Split into lines and also try multi-word chunks
   const raw = ocrText.split(/\n/).map(l => l.trim()).filter(l => l.length >= 3);
   const taggedIds = new Set();
@@ -46,9 +46,9 @@ function matchOcrToCards(ocrText, allCards) {
       results.push({ card: bestCard, ocrLine: line, confidence: Math.min(bestScore, 1) });
     }
   }
-  // Sort by confidence descending
+  // Sort by confidence descending, keep only top N
   results.sort((a, b) => b.confidence - a.confidence);
-  return results;
+  return results.slice(0, maxCards);
 }
 
 // ── Responsive hook ──────────────────────────────────────────────────────────
@@ -433,6 +433,7 @@ export default function ScoreSheet({ allCards = [] }) {
   const [ocrBusy, setOcrBusy] = useState(false);
   const [ocrProgress, setOcrProgress] = useState("");
   const [ocrResults, setOcrResults] = useState(null); // [{card, ocrLine, confidence, selected, correctedCard}]
+  const [ocrCardCount, setOcrCardCount] = useState(7); // how many cards in the photo
 
   const handlePhotoCapture = useCallback(async (e) => {
     const file = e.target.files?.[0];
@@ -448,7 +449,7 @@ export default function ScoreSheet({ allCards = [] }) {
         },
       });
       setOcrProgress("Matching cards...");
-      const matches = matchOcrToCards(result.data.text, allCards);
+      const matches = matchOcrToCards(result.data.text, allCards, ocrCardCount);
       // Pre-select matches with decent confidence
       setOcrResults(matches.map(m => ({
         ...m,
@@ -466,7 +467,7 @@ export default function ScoreSheet({ allCards = [] }) {
       // Reset file input so same file can be re-selected
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
-  }, [allCards]);
+  }, [allCards, ocrCardCount]);
 
   const updateOcrResult = useCallback((idx, field, value) => {
     setOcrResults(prev => prev.map((r, i) => i === idx ? { ...r, [field]: value } : r));
@@ -562,6 +563,7 @@ export default function ScoreSheet({ allCards = [] }) {
     setOcrResults(null);
     setOcrBusy(false);
     setOcrProgress("");
+    setOcrCardCount(7);
     setSaveMsg(null);
   }, []);
 
@@ -967,7 +969,7 @@ export default function ScoreSheet({ allCards = [] }) {
                 )}
                 </div>
 
-                {/* Camera / photo button */}
+                {/* Card count picker + Camera button */}
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -976,20 +978,39 @@ export default function ScoreSheet({ allCards = [] }) {
                   onChange={handlePhotoCapture}
                   style={{ display: "none" }}
                 />
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={ocrBusy}
-                  title="Take a photo of your cards"
+                <select
+                  value={ocrCardCount}
+                  onChange={e => setOcrCardCount(parseInt(e.target.value))}
+                  title="How many cards in the photo?"
                   style={{
                     width: 44, height: 44, flexShrink: 0, borderRadius: 8,
                     border: `1px solid ${T.purple + "44"}`,
                     background: T.purple + "0a",
-                    color: T.purple, fontSize: 20,
+                    color: T.purple, fontSize: 14, fontWeight: 700,
+                    textAlign: "center", cursor: "pointer",
+                    appearance: "none", WebkitAppearance: "none",
+                    paddingLeft: 12,
+                  }}>
+                  {[1,2,3,4,5,6,7,8,9,10,11,12,14].map(n => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={ocrBusy}
+                  title={`Scan ${ocrCardCount} card${ocrCardCount !== 1 ? "s" : ""} from photo`}
+                  style={{
+                    height: 44, flexShrink: 0, borderRadius: 8,
+                    border: `1px solid ${T.purple + "44"}`,
+                    background: T.purple + "0a",
+                    color: T.purple, fontSize: 13, fontWeight: 600,
                     display: "flex", alignItems: "center", justifyContent: "center",
+                    gap: 4, padding: "0 12px",
                     cursor: ocrBusy ? "wait" : "pointer",
                     opacity: ocrBusy ? 0.5 : 1,
+                    whiteSpace: "nowrap",
                   }}>
-                  {"\uD83D\uDCF7"}
+                  {"\uD83D\uDCF7"} Scan
                 </button>
               </div>
 
