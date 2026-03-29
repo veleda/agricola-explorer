@@ -656,7 +656,6 @@ async def ocr_cards(request: Request):
 
     body = await request.json()
     image_data: str = body.get("image", "")      # data:image/jpeg;base64,... or raw base64
-    max_cards: int = body.get("maxCards", 7)
 
     # Strip data-URI prefix if present
     if image_data.startswith("data:"):
@@ -674,13 +673,12 @@ async def ocr_cards(request: Request):
     card_names_str = "\n".join(_ALL_CARD_NAMES)
 
     prompt = (
-        f"You are looking at a photo of {max_cards} Agricola board game card(s). "
-        "Identify the NAME of each card visible in the photo. "
+        "You are looking at a photo of one or more Agricola board game cards. "
+        "Identify the NAME of every card visible in the photo. "
         "Return ONLY the card names, one per line, nothing else. "
         "No numbering, no bullets, no explanations. "
         "Match names exactly from this reference list:\n\n"
-        f"{card_names_str}\n\n"
-        f"Return at most {max_cards} card name(s)."
+        f"{card_names_str}"
     )
 
     try:
@@ -728,7 +726,7 @@ async def ocr_cards(request: Request):
         name_to_card = {c["name"].lower(): c for c in ALL_CARDS}
         results = []
         seen_ids = set()
-        for line in lines[:max_cards]:
+        for line in lines:
             line_lower = line.lower().strip().rstrip(".")
             # Try exact match first
             card = name_to_card.get(line_lower)

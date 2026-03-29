@@ -428,7 +428,6 @@ export default function ScoreSheet({ allCards = [] }) {
   const [ocrBusy, setOcrBusy] = useState(false);
   const [ocrProgress, setOcrProgress] = useState("");
   const [ocrResults, setOcrResults] = useState(null); // [{card, ocrLine, confidence, selected, correctedCard}]
-  const [ocrCardCount, setOcrCardCount] = useState(7); // how many cards in the photo
 
   const handlePhotoCapture = useCallback(async (e) => {
     const file = e.target.files?.[0];
@@ -449,7 +448,7 @@ export default function ScoreSheet({ allCards = [] }) {
       const resp = await fetch(`${API_BASE}/api/ocr-cards`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: b64, maxCards: ocrCardCount }),
+        body: JSON.stringify({ image: b64 }),
       });
 
       if (!resp.ok) {
@@ -477,7 +476,7 @@ export default function ScoreSheet({ allCards = [] }) {
       setOcrBusy(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
-  }, [allCards, ocrCardCount]);
+  }, [allCards]);
 
   const updateOcrResult = useCallback((idx, field, value) => {
     setOcrResults(prev => prev.map((r, i) => i === idx ? { ...r, [field]: value } : r));
@@ -979,7 +978,7 @@ export default function ScoreSheet({ allCards = [] }) {
                 )}
                 </div>
 
-                {/* Card count picker + Camera button */}
+                {/* Camera button */}
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -988,27 +987,10 @@ export default function ScoreSheet({ allCards = [] }) {
                   onChange={handlePhotoCapture}
                   style={{ display: "none" }}
                 />
-                <select
-                  value={ocrCardCount}
-                  onChange={e => setOcrCardCount(parseInt(e.target.value))}
-                  title="How many cards in the photo?"
-                  style={{
-                    width: 44, height: 44, flexShrink: 0, borderRadius: 8,
-                    border: `1px solid ${T.purple + "44"}`,
-                    background: T.purple + "0a",
-                    color: T.purple, fontSize: 14, fontWeight: 700,
-                    textAlign: "center", cursor: "pointer",
-                    appearance: "none", WebkitAppearance: "none",
-                    paddingLeft: 12,
-                  }}>
-                  {[1,2,3,4,5,6,7,8,9,10,11,12,14].map(n => (
-                    <option key={n} value={n}>{n}</option>
-                  ))}
-                </select>
                 <button
                   onClick={() => fileInputRef.current?.click()}
                   disabled={ocrBusy}
-                  title={`Scan ${ocrCardCount} card${ocrCardCount !== 1 ? "s" : ""} from photo`}
+                  title="Scan cards from photo"
                   style={{
                     height: 44, flexShrink: 0, borderRadius: 8,
                     border: `1px solid ${T.purple + "44"}`,
