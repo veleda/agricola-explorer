@@ -16,10 +16,10 @@ primary_region = 'ams'
   min_machines_running = 0
 
 [[vm]]
-  memory = '1gb'
+  memory = '512mb'
   cpu_kind = 'shared'
   cpus = 1
-  memory_mb = 1024
+  memory_mb = 512
 
 [mounts]
   source = "agricola_data"
