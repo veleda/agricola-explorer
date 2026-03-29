@@ -394,8 +394,15 @@ def load_cards(json_path: str = "data/cards.json",
         drafted = xlsx.get("drafted") if xlsx.get("drafted") is not None else st.get("drafted")
         played = xlsx.get("played") if xlsx.get("played") is not None else st.get("played")
         won = xlsx.get("won") if xlsx.get("won") is not None else st.get("won")
-        adp = xlsx.get("ADPcorr") or xlsx.get("ADP") or st.get("ADP")
-        pwr = xlsx.get("PWR") or st.get("PWR")
+        # Use 'is not None' checks to avoid dropping 0 values
+        # Corrected values (PWRcorr/ADPcorr) are the primary stats;
+        # fall back to raw PWR/ADP when corrected values are absent.
+        _adp_corr = xlsx.get("ADPcorr")
+        _adp_raw = xlsx.get("ADP") if xlsx.get("ADP") is not None else st.get("ADP")
+        adp = _adp_corr if _adp_corr is not None else _adp_raw
+        _pwr_corr = xlsx.get("PWRcorr")
+        _pwr_raw = xlsx.get("PWR") if xlsx.get("PWR") is not None else st.get("PWR")
+        pwr = _pwr_corr if _pwr_corr is not None else _pwr_raw
 
         # Recompute play_ratio and win_ratio from updated stats
         play_ratio = st.get("play_ratio")
@@ -431,15 +438,17 @@ def load_cards(json_path: str = "data/cards.json",
             "played": played,
             "won": won,
             "ADP": adp,
+            "ADP_raw": _adp_raw,
             "play_ratio": play_ratio,
             "win_ratio": win_ratio,
             "PWR": pwr,
+            "PWR_raw": _pwr_raw,
             "PWR_no_log": st.get("PWR_no_log"),
             "banned": st.get("banned"),
             # Norwegian deck: DB presence (by UUID) is the definitive source
             "is_no": xlsx.get("is_no", False),
             # Curated database XLSX fields (merged on card_uuid)
-            "PWRcorr": xlsx.get("PWRcorr"),
+            "PWRcorr": pwr,   # now same as PWR (corrected is primary)
             "Deck2": xlsx.get("Deck2"),
             "has_bonus_symbol": xlsx.get("has_bonus_symbol", False),
         })
@@ -672,5 +681,5 @@ card_combos = build_card_combos(cards, card_gains, card_affects, card_relations)
 
 # Columns the OTTR Card template does NOT know about – drop before maplib mapping
 _EXTRA_COLS = {"image_url", "card_creator", "is_passing_minor", "Decks",
-               "PWRcorr", "Deck2", "has_bonus_symbol"}
+               "PWRcorr", "Deck2", "has_bonus_symbol", "PWR_raw", "ADP_raw"}
 cards_for_rdf = cards.drop([c for c in _EXTRA_COLS if c in cards.columns])
