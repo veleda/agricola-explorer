@@ -129,8 +129,45 @@ const EXPLORER_LIGHT = {
   selectedBg: "#dbeafe",
 };
 
+// ── Pagination bar ──────────────────────────────────────────────────────────
+function PaginationBar({ page, totalPages, onPageChange, showAll, onToggleShowAll, totalCards, pageSize, themeE: E, compact }) {
+  if (totalCards <= pageSize && !showAll) return null;
+  const fs = compact ? 10 : 11;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: compact ? 6 : 10, padding: compact ? "8px 0" : "10px 0", flexWrap: "wrap" }}>
+      <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: fs, color: E.textDim, cursor: "pointer", userSelect: "none" }}>
+        <input type="checkbox" checked={showAll} onChange={onToggleShowAll}
+          style={{ accentColor: E.blue, cursor: "pointer" }} />
+        Show all
+      </label>
+      {!showAll && totalPages > 1 && (
+        <>
+          <button disabled={page <= 0} onClick={() => onPageChange(page - 1)}
+            style={{
+              padding: compact ? "3px 8px" : "4px 10px", borderRadius: 6, border: `1px solid ${E.border}`,
+              background: page <= 0 ? "transparent" : E.surface, color: page <= 0 ? E.textFaint : E.text,
+              fontSize: fs, cursor: page <= 0 ? "default" : "pointer", opacity: page <= 0 ? 0.4 : 1,
+            }}>{"\u2190"} Prev</button>
+          <span style={{ fontSize: fs, color: E.textMuted }}>
+            Page {page + 1} of {totalPages}
+          </span>
+          <button disabled={page >= totalPages - 1} onClick={() => onPageChange(page + 1)}
+            style={{
+              padding: compact ? "3px 8px" : "4px 10px", borderRadius: 6, border: `1px solid ${E.border}`,
+              background: page >= totalPages - 1 ? "transparent" : E.surface, color: page >= totalPages - 1 ? E.textFaint : E.text,
+              fontSize: fs, cursor: page >= totalPages - 1 ? "default" : "pointer", opacity: page >= totalPages - 1 ? 0.4 : 1,
+            }}>Next {"\u2192"}</button>
+        </>
+      )}
+      <span style={{ fontSize: fs, color: E.textDim, marginLeft: "auto" }}>
+        {showAll ? totalCards : `${Math.min(page * pageSize + 1, totalCards)}–${Math.min((page + 1) * pageSize, totalCards)} of ${totalCards}`} cards
+      </span>
+    </div>
+  );
+}
+
 // ── Build SPARQL string from filters ────────────────────────────────────────
-function buildSparql(filters, limit, allTypes) {
+function buildSparql(filters, _unused, allTypes) {
   const lines = [
     "PREFIX : <http://agricola.veronahe.no/>",
     "",
@@ -158,7 +195,7 @@ function buildSparql(filters, limit, allTypes) {
   lines.push("  FILTER(?winRatio >= " + filters.winRange[0] + " && ?winRatio <= " + filters.winRange[1] + ")");
   lines.push("}");
   lines.push("ORDER BY DESC(?winRatio)");
-  if (limit !== "all") lines.push("LIMIT " + limit);
+  // no LIMIT — pagination is client-side
 
   return lines.join("\n");
 }
@@ -257,8 +294,9 @@ function GraphView({ cards, onSelectCard, selectedId, onOverflow, themeE }) {
       .attr("x", -8).attr("y", -8).attr("width", 16).attr("height", 16).attr("rx", 3)
       .attr("fill", themeE.surface).attr("stroke", themeE.edgeDefault).attr("opacity", 0.7);
 
-    // Show labels when ≤50 nodes; hover-only above 50
-    const showLabels = n <= 50;
+    // Show labels when ≤50 cards; hover-only above 50
+    const cardCount = nodes.filter(d => d.nodeType === "card").length;
+    const showLabels = cardCount <= 50;
     node.append("text")
       .text(d => d.name)
       .attr("font-size", d => d.nodeType === "card" ? 9 : 7)
@@ -443,6 +481,140 @@ function CardSearchBox({ allCards, onSelect, themeE }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function GalleryView({ cards, onSelectCard, selectedId, themeE }) {
+  const isMobile = useIsMobile();
+  const gridCols = isMobile ? "repeat(auto-fill, minmax(140px, 1fr))" : "repeat(auto-fill, minmax(180px, 1fr))";
+
+  return (
+    <div style={{ padding: "16px", overflow: "auto", height: "100%" }}>
+      <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 12 }}>
+        {cards.map(c => {
+          const imgSrc = c.imageUrl ? `${API_BASE}/api/imgproxy?url=${encodeURIComponent(c.imageUrl)}` : null;
+          const isSelected = c.id === selectedId;
+          return (
+            <div
+              key={c.id}
+              onClick={() => onSelectCard(c.id)}
+              style={{
+                background: themeE.surface,
+                border: isSelected ? `2px solid ${themeE.blue}` : `1px solid ${themeE.border}`,
+                borderRadius: 12,
+                overflow: "hidden",
+                cursor: "pointer",
+                transition: "all 0.15s",
+                display: "flex",
+                flexDirection: "column",
+              }}
+              onMouseEnter={e => {
+                if (!isSelected) {
+                  e.currentTarget.style.borderColor = themeE.accent;
+                  e.currentTarget.style.transform = "translateY(-2px)";
+                  e.currentTarget.style.boxShadow = `0 4px 12px ${themeE.text}11`;
+                }
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.borderColor = isSelected ? themeE.blue : themeE.border;
+                e.currentTarget.style.transform = "translateY(0)";
+                e.currentTarget.style.boxShadow = "none";
+              }}
+            >
+              {/* Image */}
+              {imgSrc && (
+                <div style={{
+                  width: "100%",
+                  aspectRatio: "3 / 4",
+                  background: themeE.surfaceAlt,
+                  overflow: "hidden",
+                }}>
+                  <img
+                    src={imgSrc}
+                    alt={c.name}
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      objectFit: "cover",
+                      objectPosition: "top",
+                    }}
+                    onError={e => {
+                      e.target.parentElement.style.display = "none";
+                    }}
+                  />
+                </div>
+              )}
+              {!imgSrc && (
+                <div style={{
+                  width: "100%",
+                  aspectRatio: "3 / 4",
+                  background: themeE.surfaceAlt,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: isMobile ? 32 : 40,
+                }}>
+                  {TYPE_ICONS[c.type] || "\uD83D\uDCBC"}
+                </div>
+              )}
+
+              {/* Card info */}
+              <div style={{ padding: "10px", display: "flex", flexDirection: "column", gap: 6 }}>
+                {/* Name */}
+                <div style={{
+                  fontSize: isMobile ? 12 : 13,
+                  fontWeight: 700,
+                  color: themeE.text,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}>
+                  {c.name}
+                </div>
+
+                {/* Deck badge */}
+                <div style={{
+                  display: "inline-block",
+                  padding: "2px 8px",
+                  borderRadius: 99,
+                  background: DECK_COLOURS[c.deck] + "22",
+                  color: DECK_COLOURS[c.deck],
+                  fontSize: 10,
+                  fontWeight: 600,
+                  width: "fit-content",
+                  border: `1px solid ${DECK_COLOURS[c.deck]}44`,
+                }}>
+                  {c.deck}
+                </div>
+
+                {/* Stats */}
+                <div style={{
+                  display: "flex",
+                  gap: 8,
+                  fontSize: isMobile ? 10 : 11,
+                  color: themeE.textMuted,
+                  borderTop: `1px solid ${themeE.border}`,
+                  paddingTop: 6,
+                }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ color: themeE.textDim, fontSize: 9, marginBottom: 2 }}>PWR</div>
+                    <div style={{ color: c.pwr > 2 ? themeE.purple : themeE.textSecondary, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
+                      {c.pwr > 0 ? c.pwr.toFixed(1) : "–"}
+                    </div>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ color: themeE.textDim, fontSize: 9, marginBottom: 2 }}>Win %</div>
+                    <div style={{ color: c.winRatio > 0.33 ? themeE.green : themeE.textSecondary, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
+                      {(c.winRatio * 100).toFixed(0)}%
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -721,7 +893,7 @@ export default function App() {
   const [appMode, setAppMode] = useState(isMobile ? "home" : "explorer");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [handsDraftType, setHandsDraftType] = useState(null); // for linking from drafter
-  const [explorerTheme, setExplorerTheme] = useState("dark");
+  const [explorerTheme, setExplorerTheme] = useState("light");
 
   // Auto-collapse sidebar when entering drafter/hands, expand when returning to explorer
   const setAppModeWithSidebar = useCallback((mode, opts) => {
@@ -771,8 +943,11 @@ export default function App() {
   });
   const [selectedId, setSelectedId] = useState(null);
   const [view, setView] = useState("graph");
+  const [tableStyle, setTableStyle] = useState("list"); // "list" | "gallery"
   const [showSparql, setShowSparql] = useState(false);
-  const [limit, setLimit] = useState(100);           // 10 | 20 | 50 | 100 | "all"
+  const [graphLimit, setGraphLimit] = useState(35);
+  const [tablePage, setTablePage] = useState(0);      // current page index for table pagination
+  const [showAllTable, setShowAllTable] = useState(false); // bypass pagination
   const [sparql, setSparql] = useState("");
   const [sparqlEdited, setSparqlEdited] = useState(false);
   const [queryResult, setQueryResult] = useState(null);
@@ -841,8 +1016,8 @@ export default function App() {
 
   // Regenerate SPARQL from filters (only if user hasn't hand-edited)
   const generatedSparql = useMemo(
-    () => buildSparql({ ...filters, _allDecksLen: meta.decks.length }, limit, meta.types),
-    [filters, limit, meta]
+    () => buildSparql({ ...filters, _allDecksLen: meta.decks.length }, null, meta.types),
+    [filters, meta]
   );
 
   useEffect(() => {
@@ -892,9 +1067,8 @@ export default function App() {
       if (filters.prerequisite && c.prerequisite !== filters.prerequisite) return false;
       return true;
     });
-    if (limit !== "all") cards = cards.slice(0, limit);
     return cards;
-  }, [activeCards, filters, limit]);
+  }, [activeCards, filters]);
 
   const toggleSort = useCallback((col) => {
     if (sortCol === col) {
@@ -911,6 +1085,12 @@ export default function App() {
     const dir = sortDir === "desc" ? -1 : 1;
     return [...filtered].sort((a, b) => ((a[sortCol] || 0) - (b[sortCol] || 0)) * dir);
   }, [filtered, sortCol, sortDir]);
+
+  // Reset table page when filters/sort change
+  useEffect(() => { setTablePage(0); }, [filtered, sortCol, sortDir]);
+
+  const totalTablePages = Math.max(1, Math.ceil(sorted.length / graphLimit));
+  const pagedCards = showAllTable ? sorted : sorted.slice(tablePage * graphLimit, (tablePage + 1) * graphLimit);
 
   const applyPreset = (preset) => {
     setSparqlEdited(false);
@@ -940,67 +1120,6 @@ export default function App() {
   // ── Sidebar content (shared between desktop sidebar and mobile drawer) ─
   const filterContent = (
     <>
-      {/* Header (desktop only — drawer has its own) */}
-      {!isMobile && (
-        <div style={{ padding: "12px 12px 8px", borderBottom: `1px solid ${E.border}` }}>
-          {/* App title */}
-          <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: -0.5, color: E.accent, marginBottom: 10, textAlign: "center" }}>
-            {"\uD83C\uDF3E"} Agricola
-          </div>
-
-          {/* Navigation buttons */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            {[
-              { mode: "explorer", emoji: "\uD83D\uDDFA\uFE0F", label: "Explorer", desc: `${activeCards.length} cards` },
-              { mode: "drafter", emoji: "\uD83C\uDCCF", label: "Drafter", desc: "Draft vs 3 NPCs" },
-              { mode: "hands", emoji: "\uD83E\uDD1D", label: "Community Hands", desc: "Browse & search" },
-              { mode: "score", emoji: "\uD83D\uDCCB", label: "Score Sheet", desc: "Calculate your score" },
-            ].map(({ mode, emoji, label, desc }) => {
-              const isActive = appMode === mode;
-              return (
-                <button key={mode} onClick={() => setAppModeWithSidebar(mode)}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 10,
-                    width: "100%", padding: "10px 12px", borderRadius: 10,
-                    border: `1.5px solid ${isActive ? E.accent : E.border}`,
-                    background: isActive ? E.accent + "18" : "transparent",
-                    cursor: "pointer", transition: "all 0.15s",
-                    textAlign: "left",
-                  }}>
-                  <span style={{ fontSize: 20, flexShrink: 0, filter: isActive ? "none" : "grayscale(0.6)", transition: "filter 0.15s" }}>{emoji}</span>
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: isActive ? 700 : 500, color: isActive ? E.accent : E.textMuted, transition: "color 0.15s", lineHeight: 1.2 }}>
-                      {label}
-                    </div>
-                    <div style={{ fontSize: 10, color: E.textDim, marginTop: 1 }}>{desc}</div>
-                  </div>
-                  {isActive && (
-                    <div style={{ marginLeft: "auto", width: 6, height: 6, borderRadius: 99, background: E.accent, flexShrink: 0 }} />
-                  )}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Theme toggle */}
-          <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${E.border}`, display: "flex", gap: 4 }}>
-            <button onClick={() => setExplorerTheme("dark")}
-              style={{
-                flex: 1, padding: "5px 8px", borderRadius: 6, border: `1px solid ${explorerTheme === "dark" ? E.blue : E.border}`,
-                background: explorerTheme === "dark" ? E.blue + "22" : "transparent",
-                color: explorerTheme === "dark" ? E.blue : E.textMuted,
-                fontSize: 11, cursor: "pointer", transition: "all 0.15s",
-              }}>{"\uD83C\uDF19"} Dark</button>
-            <button onClick={() => setExplorerTheme("light")}
-              style={{
-                flex: 1, padding: "5px 8px", borderRadius: 6, border: `1px solid ${explorerTheme === "light" ? E.blue : E.border}`,
-                background: explorerTheme === "light" ? E.blue + "22" : "transparent",
-                color: explorerTheme === "light" ? E.blue : E.textMuted,
-                fontSize: 11, cursor: "pointer", transition: "all 0.15s",
-              }}>{"\u2600\uFE0F"} Light</button>
-          </div>
-        </div>
-      )}
 
       {/* Norway Deck toggle */}
       <div style={{ padding: "12px 16px 4px" }}>
@@ -1066,26 +1185,8 @@ export default function App() {
         )}
       </div>
 
-      {/* SPARQL toggle + limit */}
+      {/* SPARQL toggle */}
       <div style={{ borderTop: `1px solid ${E.border}`, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
-        {/* Result limit */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 11, color: E.textDim, textTransform: "uppercase", letterSpacing: 1 }}>Limit</span>
-          <div style={{ display: "flex", gap: 4 }}>
-            {[10, 20, 50, 100, "all"].map(n => (
-              <button key={n} onClick={() => { setLimit(n); setSparqlEdited(false); }}
-                style={{
-                  padding: "3px 10px", borderRadius: 6, border: "1px solid",
-                  borderColor: limit === n ? E.blue : E.border,
-                  background: limit === n ? E.blue + "22" : "transparent",
-                  color: limit === n ? E.blue : E.textDim,
-                  fontSize: 11, cursor: "pointer", transition: "all 0.15s",
-                  textTransform: n === "all" ? "uppercase" : "none",
-                }}>{n === "all" ? "All" : n}</button>
-            ))}
-          </div>
-        </div>
-
         <button onClick={() => setShowSparql(s => !s)}
           style={{
             width: "100%", padding: "8px 12px", borderRadius: 8, border: `1px solid ${E.border}`,
@@ -1294,55 +1395,92 @@ export default function App() {
         {/* Main content */}
         <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
           {view === "graph" ? (
-            <GraphView cards={filtered} onSelectCard={handleSelectCard} selectedId={selectedId} onOverflow={() => setView("table")} themeE={E} />
+            <GraphView cards={filtered.slice(0, graphLimit)} onSelectCard={handleSelectCard} selectedId={selectedId} onOverflow={() => setView("table")} themeE={E} />
           ) : (
             <div style={{ overflow: "auto", height: "100%", padding: "0 8px 8px" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, color: E.text }}>
-                <thead>
-                  <tr style={{ borderBottom: `1px solid ${E.border}`, color: E.textDim, textAlign: "left" }}>
-                    <th style={{ padding: "6px 4px", position: "sticky", top: 0, background: E.bg, zIndex: 1 }}>Card</th>
-                    <th style={{ padding: "6px 4px", position: "sticky", top: 0, background: E.bg, zIndex: 1 }}>Dk</th>
-                    {[["winRatio", "Win"], ["playRatio", "Play"], ["pwr", "PWR"], ["adp", "ADP"]].map(([key, label]) => (
-                      <th key={key} onClick={() => toggleSort(key)}
-                        style={{
-                          padding: "6px 4px", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap",
-                          position: "sticky", top: 0, background: E.bg, zIndex: 1,
-                        }}>
-                        <span style={{ color: sortCol === key ? E.blue : "inherit" }}>{label}</span>
-                        <span style={{ marginLeft: 2, fontSize: 8, opacity: sortCol === key ? 1 : 0.3 }}>
-                          {sortCol === key ? (sortDir === "desc" ? "\u25BC" : "\u25B2") : "\u25BC"}
-                        </span>
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {sorted.map(c => {
-                    const bannedBg = c.banned ? E.bannedBg : "transparent";
-                    const rowBg = c.id === selectedId ? (c.banned ? E.bannedHoverBg : E.selectedBg) : bannedBg;
-                    return (
-                    <tr key={c.id} onClick={() => handleSelectCard(c.id)}
-                      style={{ borderBottom: `1px solid ${E.border}11`, cursor: "pointer", background: rowBg }}>
-                      <td style={{ padding: "5px 4px", fontWeight: 500, color: E.text, maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        <span style={{ color: pwrColor(c), marginRight: 3 }}>{"\u25CF"}</span>{c.name}
-                      </td>
-                      <td style={{ padding: "5px 4px", color: E.textMuted }}>{c.deck}</td>
-                      <td style={{ padding: "5px 4px", fontVariantNumeric: "tabular-nums", color: c.winRatio > 0.33 ? E.green : E.textMuted }}>
-                        {(c.winRatio * 100).toFixed(0)}%
-                      </td>
-                      <td style={{ padding: "5px 4px", fontVariantNumeric: "tabular-nums", color: E.textMuted }}>
-                        {(c.playRatio * 100).toFixed(0)}%
-                      </td>
-                      <td style={{ padding: "5px 4px", fontVariantNumeric: "tabular-nums", color: c.pwr > 2 ? E.purple : E.textMuted }}>
-                        {c.pwr > 0 ? c.pwr.toFixed(1) : "–"}
-                      </td>
-                      <td style={{ padding: "5px 4px", fontVariantNumeric: "tabular-nums", color: c.adp > 0 ? E.accent : E.textMuted }}>
-                        {c.adp > 0 ? c.adp.toFixed(1) : "–"}
-                      </td>
+              {/* List / Gallery sub-toggle */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0 4px", position: "sticky", top: 0, background: E.bg, zIndex: 2 }}>
+                <div style={{ display: "flex", background: E.surface, borderRadius: 6, overflow: "hidden", border: `1px solid ${E.border}` }}>
+                  {[["list", "\u2630"], ["gallery", "\u25A6"]].map(([s, icon]) => (
+                    <button key={s} onClick={() => setTableStyle(s)}
+                      style={{
+                        padding: "4px 10px", border: "none", fontSize: 11, cursor: "pointer",
+                        background: tableStyle === s ? E.surfaceAlt : "transparent",
+                        color: tableStyle === s ? E.text : E.textDim,
+                        display: "flex", alignItems: "center", gap: 4,
+                      }}>
+                      {icon} {s === "list" ? "List" : "Gallery"}
+                    </button>
+                  ))}
+                </div>
+                {/* Sort chips (visible in both modes) */}
+                <div style={{ display: "flex", gap: 4, marginLeft: "auto", fontSize: 10 }}>
+                  {[["pwr", "PWR"], ["winRatio", "Win"], ["adp", "ADP"]].map(([key, label]) => (
+                    <button key={key} onClick={() => toggleSort(key)}
+                      style={{
+                        padding: "3px 8px", borderRadius: 99, border: `1px solid ${sortCol === key ? E.blue : E.border}`,
+                        background: sortCol === key ? E.blue + "22" : "transparent",
+                        color: sortCol === key ? E.blue : E.textDim,
+                        fontSize: 10, cursor: "pointer",
+                      }}>
+                      {label} {sortCol === key ? (sortDir === "desc" ? "\u25BC" : "\u25B2") : ""}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <PaginationBar page={tablePage} totalPages={totalTablePages} onPageChange={setTablePage}
+                showAll={showAllTable} onToggleShowAll={() => setShowAllTable(s => !s)}
+                totalCards={sorted.length} pageSize={graphLimit} themeE={E} compact />
+              {tableStyle === "gallery" ? (
+                <GalleryView cards={pagedCards} onSelectCard={handleSelectCard} selectedId={selectedId} themeE={E} />
+              ) : (
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, color: E.text }}>
+                  <thead>
+                    <tr style={{ borderBottom: `1px solid ${E.border}`, color: E.textDim, textAlign: "left" }}>
+                      <th style={{ padding: "6px 4px" }}>Card</th>
+                      <th style={{ padding: "6px 4px" }}>Dk</th>
+                      {[["winRatio", "Win"], ["playRatio", "Play"], ["pwr", "PWR"], ["adp", "ADP"]].map(([key, label]) => (
+                        <th key={key} onClick={() => toggleSort(key)}
+                          style={{ padding: "6px 4px", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}>
+                          <span style={{ color: sortCol === key ? E.blue : "inherit" }}>{label}</span>
+                          <span style={{ marginLeft: 2, fontSize: 8, opacity: sortCol === key ? 1 : 0.3 }}>
+                            {sortCol === key ? (sortDir === "desc" ? "\u25BC" : "\u25B2") : "\u25BC"}
+                          </span>
+                        </th>
+                      ))}
                     </tr>
-                  );})}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {pagedCards.map(c => {
+                      const bannedBg = c.banned ? E.bannedBg : "transparent";
+                      const rowBg = c.id === selectedId ? (c.banned ? E.bannedHoverBg : E.selectedBg) : bannedBg;
+                      return (
+                      <tr key={c.id} onClick={() => handleSelectCard(c.id)}
+                        style={{ borderBottom: `1px solid ${E.border}11`, cursor: "pointer", background: rowBg }}>
+                        <td style={{ padding: "5px 4px", fontWeight: 500, color: E.text, maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          <span style={{ color: pwrColor(c), marginRight: 3 }}>{"\u25CF"}</span>{c.name}
+                        </td>
+                        <td style={{ padding: "5px 4px", color: E.textMuted }}>{c.deck}</td>
+                        <td style={{ padding: "5px 4px", fontVariantNumeric: "tabular-nums", color: c.winRatio > 0.33 ? E.green : E.textMuted }}>
+                          {(c.winRatio * 100).toFixed(0)}%
+                        </td>
+                        <td style={{ padding: "5px 4px", fontVariantNumeric: "tabular-nums", color: E.textMuted }}>
+                          {(c.playRatio * 100).toFixed(0)}%
+                        </td>
+                        <td style={{ padding: "5px 4px", fontVariantNumeric: "tabular-nums", color: c.pwr > 2 ? E.purple : E.textMuted }}>
+                          {c.pwr > 0 ? c.pwr.toFixed(1) : "\u2013"}
+                        </td>
+                        <td style={{ padding: "5px 4px", fontVariantNumeric: "tabular-nums", color: c.adp > 0 ? E.accent : E.textMuted }}>
+                          {c.adp > 0 ? c.adp.toFixed(1) : "\u2013"}
+                        </td>
+                      </tr>
+                    );})}
+                  </tbody>
+                </table>
+              )}
+              <PaginationBar page={tablePage} totalPages={totalTablePages} onPageChange={setTablePage}
+                showAll={showAllTable} onToggleShowAll={() => setShowAllTable(s => !s)}
+                totalCards={sorted.length} pageSize={graphLimit} themeE={E} compact />
             </div>
           )}
         </div>
@@ -1366,9 +1504,72 @@ export default function App() {
 
   // ── DESKTOP LAYOUT ────────────────────────────────────────────────────
   return (
-    <div style={{ display: "flex", height: "100vh", background: E.bg, color: E.textSecondary, fontFamily: "Inter, system-ui, sans-serif" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: E.bg, color: E.textSecondary, fontFamily: "Inter, system-ui, sans-serif" }}>
 
-      {/* ── Left sidebar: Query Builder ── */}
+      {/* ── Top navigation bar ── */}
+      <div style={{ display: "flex", alignItems: "center", height: 44, borderBottom: `1px solid ${E.border}`, background: E.surface, padding: "0 16px", gap: 16, flexShrink: 0 }}>
+        {/* Left: App title */}
+        <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: -0.5, color: E.accent, whiteSpace: "nowrap" }}>
+          {"\uD83C\uDF3E"} Agricola
+        </div>
+
+        {/* Center: Mode buttons */}
+        <div style={{ display: "flex", gap: 4 }}>
+          {[
+            { mode: "explorer", emoji: "\uD83D\uDDFA\uFE0F", label: "Explorer" },
+            { mode: "drafter", emoji: "\uD83C\uDCCF", label: "Drafter" },
+            { mode: "hands", emoji: "\uD83E\uDD1D", label: "Hands" },
+            { mode: "score", emoji: "\uD83D\uDCCB", label: "Score" },
+          ].map(({ mode, emoji, label }) => {
+            const isActive = appMode === mode;
+            return (
+              <button key={mode} onClick={() => setAppModeWithSidebar(mode)}
+                style={{
+                  display: "flex", alignItems: "center", gap: 5,
+                  padding: "6px 12px", borderRadius: 6, border: `1px solid ${isActive ? E.accent : E.border}`,
+                  background: isActive ? E.accent + "18" : "transparent",
+                  color: isActive ? E.accent : E.textMuted,
+                  fontSize: 12, fontWeight: isActive ? 600 : 500, cursor: "pointer",
+                  transition: "all 0.15s", whiteSpace: "nowrap",
+                }}>
+                <span style={{ fontSize: 13 }}>{emoji}</span>
+                {label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Right: Theme toggle + Norway deck toggle */}
+        <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+          <button onClick={() => setNorwayOnly(!norwayOnly)}
+            style={{
+              padding: "6px 10px", borderRadius: 6, border: `1px solid ${norwayOnly ? "#ef4444" : E.border}`,
+              background: norwayOnly ? "#ef444422" : "transparent",
+              color: norwayOnly ? "#ef4444" : E.textMuted,
+              fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all 0.15s",
+            }}>{"\uD83C\uDDF3\uD83C\uDDF4"} NO</button>
+          <button onClick={() => setExplorerTheme("dark")}
+            style={{
+              padding: "6px 10px", borderRadius: 6, border: `1px solid ${explorerTheme === "dark" ? E.blue : E.border}`,
+              background: explorerTheme === "dark" ? E.blue + "22" : "transparent",
+              color: explorerTheme === "dark" ? E.blue : E.textMuted,
+              fontSize: 12, cursor: "pointer", transition: "all 0.15s",
+            }}>{"\uD83C\uDF19"}</button>
+          <button onClick={() => setExplorerTheme("light")}
+            style={{
+              padding: "6px 10px", borderRadius: 6, border: `1px solid ${explorerTheme === "light" ? E.blue : E.border}`,
+              background: explorerTheme === "light" ? E.blue + "22" : "transparent",
+              color: explorerTheme === "light" ? E.blue : E.textMuted,
+              fontSize: 12, cursor: "pointer", transition: "all 0.15s",
+            }}>{"\u2600\uFE0F"}</button>
+        </div>
+      </div>
+
+      {/* Main flex row: sidebar + content */}
+      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+
+      {/* ── Left sidebar: Query Builder (Explorer only) ── */}
+      {appMode === "explorer" && (
       <div style={{
         width: sidebarCollapsed ? 40 : 280, minWidth: sidebarCollapsed ? 40 : 280,
         borderRight: `1px solid ${E.border}`, display: "flex", flexDirection: "column", overflow: "hidden",
@@ -1397,6 +1598,7 @@ export default function App() {
           </>
         )}
       </div>
+      )}
 
       {/* ── Centre: Drafter / Hands / Explorer ── */}
       {appMode === "drafter" ? (
@@ -1429,8 +1631,31 @@ export default function App() {
             ))}
           </div>
           <div style={{ fontSize: 12, color: E.textDim }}>
-            Showing <span style={{ color: E.blue, fontWeight: 600 }}>{filtered.length}</span> of {activeCards.length} cards
-            {limit !== "all" && <span style={{ color: E.border, marginLeft: 4 }}>(limit {limit})</span>}
+            {view === "graph" ? (
+              <>
+                Showing <span style={{ color: E.blue, fontWeight: 600 }}>{Math.min(graphLimit, filtered.length)}</span> of <span style={{ color: E.blue, fontWeight: 600 }}>{filtered.length}</span> cards
+                {filtered.length > graphLimit && (
+                  <div style={{ display: "flex", gap: 4, marginLeft: 8 }}>
+                    <button onClick={() => setGraphLimit(gl => Math.min(gl * 2, filtered.length))}
+                      style={{
+                        padding: "2px 8px", borderRadius: 4, border: `1px solid ${E.border}`,
+                        background: "transparent", color: E.textFaint, fontSize: 11, cursor: "pointer",
+                      }}>Show more</button>
+                    {graphLimit < filtered.length && (
+                      <button onClick={() => setGraphLimit(filtered.length)}
+                        style={{
+                          padding: "2px 8px", borderRadius: 4, border: `1px solid ${E.border}`,
+                          background: "transparent", color: E.textFaint, fontSize: 11, cursor: "pointer",
+                        }}>Show all</button>
+                    )}
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                Showing <span style={{ color: E.blue, fontWeight: 600 }}>{showAllTable ? sorted.length : pagedCards.length}</span> of <span style={{ color: E.blue, fontWeight: 600 }}>{sorted.length}</span> cards
+              </>
+            )}
           </div>
 
           {sparqlEdited && (
@@ -1475,74 +1700,100 @@ export default function App() {
         {/* Main content */}
         <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
           {view === "graph" ? (
-            <GraphView cards={filtered} onSelectCard={handleSelectCard} selectedId={selectedId} onOverflow={() => setView("table")} themeE={E} />
+            <GraphView cards={filtered.slice(0, graphLimit)} onSelectCard={handleSelectCard} selectedId={selectedId} onOverflow={() => setView("table")} themeE={E} />
           ) : (
             <div style={{ overflow: "auto", height: "100%", padding: "0 16px 16px" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, color: E.text }}>
-                <thead>
-                  <tr style={{ borderBottom: `1px solid ${E.border}`, color: E.textDim, textAlign: "left" }}>
-                    <th style={{ padding: "8px 6px" }}>Card</th>
-                    <th style={{ padding: "8px 6px" }}>Deck</th>
-                    <th style={{ padding: "8px 6px" }}>Type</th>
-                    {[["winRatio", "Win %"], ["playRatio", "Play %"], ["pwr", "PWR"], ["adp", "ADP"]].map(([key, label]) => (
-                      <th key={key} onClick={() => toggleSort(key)}
-                        style={{ padding: "8px 6px", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}
-                        onMouseEnter={e => e.currentTarget.style.color = E.textSecondary}
-                        onMouseLeave={e => e.currentTarget.style.color = sortCol === key ? E.blue : E.textDim}
-                      >
-                        <span style={{ color: sortCol === key ? E.blue : "inherit" }}>{label}</span>
-                        <span style={{ marginLeft: 4, fontSize: 10, opacity: sortCol === key ? 1 : 0.3 }}>
-                          {sortCol === key ? (sortDir === "desc" ? "\u25BC" : "\u25B2") : "\u25BC"}
-                        </span>
-                      </th>
-                    ))}
-                    <th style={{ padding: "8px 6px" }}>Gains</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sorted.map(c => {
-                    const bannedBg = c.banned ? E.bannedBg : "transparent";
-                    const rowBg = c.id === selectedId ? (c.banned ? E.bannedHoverBg : E.selectedBg) : bannedBg;
-                    return (
-                    <tr key={c.id} onClick={() => handleSelectCard(c.id)}
+              {/* List / Gallery sub-toggle */}
+              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0 6px", position: "sticky", top: 0, background: E.bg, zIndex: 2 }}>
+                <div style={{ display: "flex", background: E.surface, borderRadius: 6, overflow: "hidden", border: `1px solid ${E.border}` }}>
+                  {[["list", "\u2630"], ["gallery", "\u25A6"]].map(([s, icon]) => (
+                    <button key={s} onClick={() => setTableStyle(s)}
                       style={{
-                        borderBottom: `1px solid ${E.border}11`, cursor: "pointer",
-                        background: rowBg,
-                      }}
-                      onMouseEnter={e => { if (c.id !== selectedId) e.currentTarget.style.background = c.banned ? E.bannedHoverBg : E.tableHoverBg; }}
-                      onMouseLeave={e => { if (c.id !== selectedId) e.currentTarget.style.background = bannedBg; }}
-                    >
-                      <td style={{ padding: "6px", fontWeight: 500, color: E.text }}>
-                        <span style={{ color: pwrColor(c), marginRight: 4 }}>{"\u25CF"}</span>{c.name}
-                      </td>
-                      <td style={{ padding: "6px", color: E.textMuted }}>{c.deck}</td>
-                      <td style={{ padding: "6px", color: E.text }}>{TYPE_ICONS[c.type]} {c.type.replace(/([A-Z])/g, " $1").trim()}</td>
-                      <td style={{ padding: "6px", fontVariantNumeric: "tabular-nums", color: c.winRatio > 0.33 ? E.green : E.textMuted }}>
-                        {(c.winRatio * 100).toFixed(1)}%
-                      </td>
-                      <td style={{ padding: "6px", fontVariantNumeric: "tabular-nums", color: E.textMuted }}>
-                        {(c.playRatio * 100).toFixed(1)}%
-                      </td>
-                      <td style={{ padding: "6px", fontVariantNumeric: "tabular-nums", color: c.pwr > 2 ? E.purple : E.textMuted }}>
-                        {c.pwr > 0 ? c.pwr.toFixed(2) : "–"}
-                      </td>
-                      <td style={{ padding: "6px", fontVariantNumeric: "tabular-nums", color: c.adp > 0 ? E.accent : E.textMuted }}>
-                        {c.adp > 0 ? c.adp.toFixed(2) : "–"}
-                      </td>
-                      <td style={{ padding: "6px" }}>
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
-                          {c.gains.slice(0, 4).map(g => (
-                            <span key={g} style={{ padding: "1px 6px", borderRadius: 99, background: E.green + "15", color: E.green, fontSize: 10 }}>
-                              {g.replace(/_/g, " ")}
-                            </span>
-                          ))}
-                          {c.gains.length > 4 && <span style={{ color: E.textDim, fontSize: 10 }}>+{c.gains.length - 4}</span>}
-                        </div>
-                      </td>
+                        padding: "5px 14px", border: "none", fontSize: 12, cursor: "pointer",
+                        background: tableStyle === s ? E.surfaceAlt : "transparent",
+                        color: tableStyle === s ? E.text : E.textDim,
+                        display: "flex", alignItems: "center", gap: 4,
+                      }}>
+                      {icon} {s === "list" ? "List" : "Gallery"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <PaginationBar page={tablePage} totalPages={totalTablePages} onPageChange={setTablePage}
+                showAll={showAllTable} onToggleShowAll={() => setShowAllTable(s => !s)}
+                totalCards={sorted.length} pageSize={graphLimit} themeE={E} />
+              {tableStyle === "gallery" ? (
+                <GalleryView cards={pagedCards} onSelectCard={handleSelectCard} selectedId={selectedId} themeE={E} />
+              ) : (
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, color: E.text }}>
+                  <thead>
+                    <tr style={{ borderBottom: `1px solid ${E.border}`, color: E.textDim, textAlign: "left" }}>
+                      <th style={{ padding: "8px 6px" }}>Card</th>
+                      <th style={{ padding: "8px 6px" }}>Deck</th>
+                      <th style={{ padding: "8px 6px" }}>Type</th>
+                      {[["winRatio", "Win %"], ["playRatio", "Play %"], ["pwr", "PWR"], ["adp", "ADP"]].map(([key, label]) => (
+                        <th key={key} onClick={() => toggleSort(key)}
+                          style={{ padding: "8px 6px", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}
+                          onMouseEnter={e => e.currentTarget.style.color = E.textSecondary}
+                          onMouseLeave={e => e.currentTarget.style.color = sortCol === key ? E.blue : E.textDim}
+                        >
+                          <span style={{ color: sortCol === key ? E.blue : "inherit" }}>{label}</span>
+                          <span style={{ marginLeft: 4, fontSize: 10, opacity: sortCol === key ? 1 : 0.3 }}>
+                            {sortCol === key ? (sortDir === "desc" ? "\u25BC" : "\u25B2") : "\u25BC"}
+                          </span>
+                        </th>
+                      ))}
+                      <th style={{ padding: "8px 6px" }}>Gains</th>
                     </tr>
-                  );})}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {pagedCards.map(c => {
+                      const bannedBg = c.banned ? E.bannedBg : "transparent";
+                      const rowBg = c.id === selectedId ? (c.banned ? E.bannedHoverBg : E.selectedBg) : bannedBg;
+                      return (
+                      <tr key={c.id} onClick={() => handleSelectCard(c.id)}
+                        style={{
+                          borderBottom: `1px solid ${E.border}11`, cursor: "pointer",
+                          background: rowBg,
+                        }}
+                        onMouseEnter={e => { if (c.id !== selectedId) e.currentTarget.style.background = c.banned ? E.bannedHoverBg : E.tableHoverBg; }}
+                        onMouseLeave={e => { if (c.id !== selectedId) e.currentTarget.style.background = bannedBg; }}
+                      >
+                        <td style={{ padding: "6px", fontWeight: 500, color: E.text }}>
+                          <span style={{ color: pwrColor(c), marginRight: 4 }}>{"\u25CF"}</span>{c.name}
+                        </td>
+                        <td style={{ padding: "6px", color: E.textMuted }}>{c.deck}</td>
+                        <td style={{ padding: "6px", color: E.text, whiteSpace: "nowrap" }}>{TYPE_ICONS[c.type]} {c.type.replace(/([A-Z])/g, " $1").trim()}</td>
+                        <td style={{ padding: "6px", fontVariantNumeric: "tabular-nums", color: c.winRatio > 0.33 ? E.green : E.textMuted }}>
+                          {(c.winRatio * 100).toFixed(1)}%
+                        </td>
+                        <td style={{ padding: "6px", fontVariantNumeric: "tabular-nums", color: E.textMuted }}>
+                          {(c.playRatio * 100).toFixed(1)}%
+                        </td>
+                        <td style={{ padding: "6px", fontVariantNumeric: "tabular-nums", color: c.pwr > 2 ? E.purple : E.textMuted }}>
+                          {c.pwr > 0 ? c.pwr.toFixed(2) : "\u2013"}
+                        </td>
+                        <td style={{ padding: "6px", fontVariantNumeric: "tabular-nums", color: c.adp > 0 ? E.accent : E.textMuted }}>
+                          {c.adp > 0 ? c.adp.toFixed(2) : "\u2013"}
+                        </td>
+                        <td style={{ padding: "6px" }}>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
+                            {c.gains.slice(0, 4).map(g => (
+                              <span key={g} style={{ padding: "1px 6px", borderRadius: 99, background: E.green + "15", color: E.green, fontSize: 10 }}>
+                                {g.replace(/_/g, " ")}
+                              </span>
+                            ))}
+                            {c.gains.length > 4 && <span style={{ color: E.textDim, fontSize: 10 }}>+{c.gains.length - 4}</span>}
+                          </div>
+                        </td>
+                      </tr>
+                    );})}
+                  </tbody>
+                </table>
+              )}
+              <PaginationBar page={tablePage} totalPages={totalTablePages} onPageChange={setTablePage}
+                showAll={showAllTable} onToggleShowAll={() => setShowAllTable(s => !s)}
+                totalCards={sorted.length} pageSize={graphLimit} themeE={E} />
             </div>
           )}
         </div>
@@ -1570,6 +1821,7 @@ export default function App() {
       </div>
       </>
       )}
+      </div>
     </div>
   );
 }
