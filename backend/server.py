@@ -20,6 +20,7 @@ import os
 import sys
 import time
 import json
+import base64
 import sqlite3
 import hashlib
 import datetime
@@ -638,6 +639,126 @@ def list_scores(q: str = "", page: int = 1, pageSize: int = 20):
 
     conn.close()
     return {"scores": scores, "total": total, "page": page, "pageSize": pageSize}
+
+
+# ── Card OCR via Claude Vision ────────────────────────────────────────────────
+
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+
+# Pre-build the card name list once (used as context for Claude)
+_ALL_CARD_NAMES: list[str] = [c["name"] for c in ALL_CARDS]
+
+@app.post("/api/ocr-cards")
+async def ocr_cards(request: Request):
+    """Accept a photo (as base64 data-URI), ask Claude Vision to identify Agricola card names."""
+    if not ANTHROPIC_API_KEY:
+        return JSONResponse(status_code=500, content={"error": "ANTHROPIC_API_KEY not configured on server"})
+
+    body = await request.json()
+    image_data: str = body.get("image", "")      # data:image/jpeg;base64,... or raw base64
+    max_cards: int = body.get("maxCards", 7)
+
+    # Strip data-URI prefix if present
+    if image_data.startswith("data:"):
+        # "data:image/jpeg;base64,/9j/..."
+        header, _, b64 = image_data.partition(",")
+        media_type = header.split(";")[0].replace("data:", "")
+    else:
+        b64 = image_data
+        media_type = "image/jpeg"
+
+    if not b64:
+        return JSONResponse(status_code=400, content={"error": "no image data"})
+
+    # Build the card name reference (send the full list so Claude can match precisely)
+    card_names_str = "\n".join(_ALL_CARD_NAMES)
+
+    prompt = (
+        f"You are looking at a photo of {max_cards} Agricola board game card(s). "
+        "Identify the NAME of each card visible in the photo. "
+        "Return ONLY the card names, one per line, nothing else. "
+        "No numbering, no bullets, no explanations. "
+        "Match names exactly from this reference list:\n\n"
+        f"{card_names_str}\n\n"
+        f"Return at most {max_cards} card name(s)."
+    )
+
+    try:
+        client = await _get_http_client()
+        resp = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 512,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": b64,
+                            },
+                        },
+                        {"type": "text", "text": prompt},
+                    ],
+                }],
+            },
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        # Extract text from Claude's response
+        reply_text = ""
+        for block in data.get("content", []):
+            if block.get("type") == "text":
+                reply_text += block["text"]
+
+        # Parse card names from reply
+        lines = [l.strip() for l in reply_text.strip().split("\n") if l.strip()]
+
+        # Match each returned name against our card database
+        name_to_card = {c["name"].lower(): c for c in ALL_CARDS}
+        results = []
+        seen_ids = set()
+        for line in lines[:max_cards]:
+            line_lower = line.lower().strip().rstrip(".")
+            # Try exact match first
+            card = name_to_card.get(line_lower)
+            if not card:
+                # Fuzzy: find closest card name
+                best, best_score = None, 0
+                for cname, cobj in name_to_card.items():
+                    # Simple containment + length similarity
+                    if cname in line_lower or line_lower in cname:
+                        score = min(len(cname), len(line_lower)) / max(len(cname), len(line_lower))
+                        if score > best_score:
+                            best_score = score
+                            best = cobj
+                card = best
+            if card and card["id"] not in seen_ids:
+                seen_ids.add(card["id"])
+                results.append({
+                    "cardId": card["id"],
+                    "name": card["name"],
+                    "ocrLine": line,
+                    "confidence": 1.0 if card["name"].lower() == line_lower else 0.85,
+                })
+
+        return {"cards": results}
+
+    except httpx.HTTPStatusError as e:
+        err_body = e.response.text[:500] if hasattr(e.response, "text") else str(e)
+        return JSONResponse(status_code=e.response.status_code, content={"error": f"Claude API error: {err_body}"})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": f"OCR failed: {str(e)}"})
 
 
 # ── Image proxy (avoids mixed-content blocking) ─────────────────────────────

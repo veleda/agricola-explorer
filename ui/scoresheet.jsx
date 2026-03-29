@@ -1,55 +1,6 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
-import Tesseract from "tesseract.js";
 
 const API_BASE = "";
-
-// ── Fuzzy matching helpers ──────────────────────────────────────────────────
-function normalizeStr(s) {
-  return s.toLowerCase().replace(/[^a-z0-9\u00c0-\u017f]/g, " ").replace(/\s+/g, " ").trim();
-}
-
-/** Simple bigram similarity (Dice coefficient) */
-function bigramSimilarity(a, b) {
-  const na = normalizeStr(a), nb = normalizeStr(b);
-  if (!na || !nb) return 0;
-  if (na === nb) return 1;
-  const bigrams = (s) => { const bg = []; for (let i = 0; i < s.length - 1; i++) bg.push(s.slice(i, i + 2)); return bg; };
-  const aB = bigrams(na), bB = bigrams(nb);
-  const bSet = new Set(bB);
-  let matches = 0;
-  for (const g of aB) if (bSet.has(g)) matches++;
-  return (2 * matches) / (aB.length + bB.length);
-}
-
-/** Match OCR text lines against card names, return top maxCards candidates */
-function matchOcrToCards(ocrText, allCards, maxCards = 7) {
-  // Split into lines and also try multi-word chunks
-  const raw = ocrText.split(/\n/).map(l => l.trim()).filter(l => l.length >= 3);
-  const taggedIds = new Set();
-  const results = [];
-
-  for (const line of raw) {
-    let bestCard = null, bestScore = 0;
-    for (const card of allCards) {
-      const sim = bigramSimilarity(line, card.name);
-      // Also check if the card name is contained in the line or vice versa
-      const nl = normalizeStr(line), nc = normalizeStr(card.name);
-      const containsBonus = nl.includes(nc) || nc.includes(nl) ? 0.15 : 0;
-      const total = sim + containsBonus;
-      if (total > bestScore) {
-        bestScore = total;
-        bestCard = card;
-      }
-    }
-    if (bestCard && bestScore >= 0.35 && !taggedIds.has(bestCard.id)) {
-      taggedIds.add(bestCard.id);
-      results.push({ card: bestCard, ocrLine: line, confidence: Math.min(bestScore, 1) });
-    }
-  }
-  // Sort by confidence descending, keep only top N
-  results.sort((a, b) => b.confidence - a.confidence);
-  return results.slice(0, maxCards);
-}
 
 // ── Responsive hook ──────────────────────────────────────────────────────────
 function useIsMobile(breakpoint = 600) {
@@ -483,32 +434,47 @@ export default function ScoreSheet({ allCards = [] }) {
     const file = e.target.files?.[0];
     if (!file) return;
     setOcrBusy(true);
-    setOcrProgress("Starting OCR...");
+    setOcrProgress("Uploading photo...");
     try {
-      const result = await Tesseract.recognize(file, "eng", {
-        logger: (m) => {
-          if (m.status === "recognizing text") {
-            setOcrProgress(`Reading text... ${Math.round((m.progress || 0) * 100)}%`);
-          }
-        },
+      // Convert file to base64 data-URI
+      const b64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
       });
-      setOcrProgress("Matching cards...");
-      const matches = matchOcrToCards(result.data.text, allCards, ocrCardCount);
-      // Pre-select matches with decent confidence
-      setOcrResults(matches.map(m => ({
-        ...m,
-        selected: m.confidence >= 0.45,
-        correctedCard: null, // user override
-        searchText: "",       // for inline correction search
+
+      setOcrProgress("Identifying cards...");
+
+      const resp = await fetch(`${API_BASE}/api/ocr-cards`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: b64, maxCards: ocrCardCount }),
+      });
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.error || `Server error ${resp.status}`);
+      }
+
+      const data = await resp.json();
+      const cardById = Object.fromEntries(allCards.map(c => [c.id, c]));
+
+      setOcrResults((data.cards || []).map(r => ({
+        card: cardById[r.cardId] || { id: r.cardId, name: r.name, type: "" },
+        ocrLine: r.ocrLine,
+        confidence: r.confidence,
+        selected: r.confidence >= 0.5,
+        correctedCard: null,
+        searchText: "",
       })));
       setOcrProgress("");
     } catch (err) {
       console.error("OCR failed:", err);
-      setOcrProgress("OCR failed — try a clearer photo");
-      setTimeout(() => setOcrProgress(""), 3000);
+      setOcrProgress(err.message || "OCR failed — try a clearer photo");
+      setTimeout(() => setOcrProgress(""), 4000);
     } finally {
       setOcrBusy(false);
-      // Reset file input so same file can be re-selected
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   }, [allCards, ocrCardCount]);
