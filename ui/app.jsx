@@ -1111,7 +1111,7 @@ export default function App() {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: E.bg, color: E.textSecondary, fontFamily: "Inter, system-ui, sans-serif" }}>
         <div style={{ textAlign: "center", padding: 24 }}>
           <div style={{ fontSize: isMobile ? 22 : 32, marginBottom: 12 }}>Loading knowledge graph...</div>
-          <div style={{ fontSize: 14, color: E.textDim }}>Building RDF model from {meta.totalCards || "1354"} cards</div>
+          <div style={{ fontSize: 14, color: E.textDim }}>Loading {meta.totalCards || ""} cards...</div>
         </div>
       </div>
     );
