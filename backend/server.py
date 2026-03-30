@@ -1018,6 +1018,17 @@ def ontology_page(request: Request):
     return HTMLResponse(_ONTOLOGY_HTML)
 
 
+@app.get("/cards")
+@app.get("/occupations")
+@app.get("/minor-improvements")
+@app.get("/major-improvements")
+@app.get("/decks")
+def category_page(request: Request):
+    slug = request.url.path.lstrip("/")
+    html = ld.build_category_page(slug, ALL_CARDS, _DECK_INFO)
+    return HTMLResponse(html)
+
+
 @app.get("/deck_{code:path}")
 def deck_page(code: str, request: Request):
     local = f"deck_{code}"

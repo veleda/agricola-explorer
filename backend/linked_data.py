@@ -51,7 +51,9 @@ table.props th { font-weight: 600; background: var(--code-bg); }
 .card-img { width: 200px; border-radius: 8px; border: 1px solid var(--border); }
 .card-details { flex: 1; min-width: 280px; }
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin-top: 12px; }
-.stat-box { background: var(--code-bg); border-radius: 6px; padding: 10px; text-align: center; }
+.stat-box { background: var(--code-bg); border-radius: 6px; padding: 10px; text-align: center; transition: background 0.15s; }
+a.stat-box { text-decoration: none; display: block; }
+a.stat-box:hover { background: var(--border); text-decoration: none; }
 .stat-box .val { font-size: 1.3rem; font-weight: 700; color: var(--accent); }
 .stat-box .lbl { font-size: 0.75rem; color: var(--muted); }
 .tag { display: inline-block; padding: 2px 8px; margin: 2px; border-radius: 12px; font-size: 0.78rem; background: var(--code-bg); border: 1px solid var(--border); }
@@ -195,11 +197,11 @@ def build_ontology_page(all_cards: list, deck_info: list[dict]) -> str:
 <section>
 <h2>Overview</h2>
 <div class="stat-grid">
-  <div class="stat-box"><div class="val">{n_cards}</div><div class="lbl">Cards</div></div>
-  <div class="stat-box"><div class="val">{n_occ}</div><div class="lbl">Occupations</div></div>
-  <div class="stat-box"><div class="val">{n_minor}</div><div class="lbl">Minor Improvements</div></div>
-  <div class="stat-box"><div class="val">{n_major}</div><div class="lbl">Major Improvements</div></div>
-  <div class="stat-box"><div class="val">{n_decks}</div><div class="lbl">Decks</div></div>
+  <a href="/cards" class="stat-box"><div class="val">{n_cards}</div><div class="lbl">Cards</div></a>
+  <a href="/occupations" class="stat-box"><div class="val">{n_occ}</div><div class="lbl">Occupations</div></a>
+  <a href="/minor-improvements" class="stat-box"><div class="val">{n_minor}</div><div class="lbl">Minor Improvements</div></a>
+  <a href="/major-improvements" class="stat-box"><div class="val">{n_major}</div><div class="lbl">Major Improvements</div></a>
+  <a href="/decks" class="stat-box"><div class="val">{n_decks}</div><div class="lbl">Decks</div></a>
 </div>
 </section>
 """)
@@ -461,6 +463,121 @@ def build_deck_page(deck: dict, cards_in_deck: list[dict]) -> str:
     parts.append('</div>')
 
     return _page(label + " — Agricola", "\n".join(parts), canonical=NS + deck["local"])
+
+
+# ── Category listing pages ────────────────────────────────────────────────────
+
+# Map URL slug → (page title, card type filter or "deck")
+CATEGORY_SLUGS = {
+    "cards":              ("All Cards",           None),
+    "occupations":        ("Occupations",         "Occupation"),
+    "minor-improvements": ("Minor Improvements",  "MinorImprovement"),
+    "major-improvements": ("Major Improvements",  "MajorImprovement"),
+    "decks":              ("Decks",               "deck"),
+}
+
+
+def build_category_page(
+    slug: str,
+    all_cards: list,
+    deck_info: list[dict],
+) -> str:
+    """Generate an HTML page listing all individuals of a category with clickable IRIs."""
+    title, type_filter = CATEGORY_SLUGS[slug]
+
+    parts = []
+
+    # Header
+    parts.append(f"""
+<header>
+<div class="container">
+  <div>
+    <h1>{_e(title)}</h1>
+    <div class="subtitle">Agricola Card Ontology — Individual listing</div>
+  </div>
+  <div style="margin-left:auto">
+    <a href="/">Explorer</a> &middot; <a href="/ontology">Ontology</a>
+  </div>
+</div>
+</header>
+""")
+
+    parts.append('<div class="container">')
+    parts.append('<a class="back-link" href="/ontology">&larr; Back to Ontology</a>')
+
+    if type_filter == "deck":
+        # List deck instances
+        parts.append(f'<section><h2>{_e(title)} ({len(deck_info)})</h2>')
+        parts.append('<table class="props">')
+        parts.append('<tr><th>Deck</th><th>Code</th><th>Year</th><th>Publisher</th><th>IRI</th></tr>')
+        for d in sorted(deck_info, key=lambda d: (d.get("year") or 9999, d["code"])):
+            iri_local = d["local"]
+            parts.append(
+                f'<tr>'
+                f'<td><a href="/{_e(iri_local)}">{_e(d["label"])}</a></td>'
+                f'<td>{_e(d["code"])}</td>'
+                f'<td>{d.get("year") or "—"}</td>'
+                f'<td>{_e(d.get("publisher") or "—")}</td>'
+                f'<td class="iri"><a href="/{_e(iri_local)}">{_e(NS + iri_local)}</a></td>'
+                f'</tr>'
+            )
+        parts.append('</table></section>')
+    else:
+        # List cards — optionally filtered by type
+        if type_filter:
+            cards = [c for c in all_cards if c["type"] == type_filter]
+        else:
+            cards = list(all_cards)
+        cards.sort(key=lambda c: c["name"])
+
+        # Group by deck for the "all cards" view, flat list otherwise
+        if type_filter is None:
+            # Group by type
+            by_type: dict[str, list] = {}
+            for c in cards:
+                by_type.setdefault(c["type"], []).append(c)
+            for ctype in ["Occupation", "MinorImprovement", "MajorImprovement"]:
+                clist = by_type.get(ctype, [])
+                if not clist:
+                    continue
+                type_label = {"Occupation": "Occupations", "MinorImprovement": "Minor Improvements", "MajorImprovement": "Major Improvements"}.get(ctype, ctype)
+                parts.append(f'<section><h2>{_e(type_label)} ({len(clist)})</h2>')
+                _append_card_table(parts, clist)
+                parts.append('</section>')
+        else:
+            parts.append(f'<section><h2>{_e(title)} ({len(cards)})</h2>')
+            _append_card_table(parts, cards)
+            parts.append('</section>')
+
+    parts.append("""
+<footer>
+  Agricola Card Ontology &middot; <a href="/ontology">Ontology Documentation</a> &middot; <a href="/">Explorer</a>
+</footer>
+""")
+    parts.append('</div>')
+
+    return _page(f"{title} — Agricola Ontology", "\n".join(parts), canonical=NS + slug)
+
+
+def _append_card_table(parts: list, cards: list) -> None:
+    """Append an HTML table of cards with clickable IRIs."""
+    parts.append('<table class="props">')
+    parts.append('<tr><th>Name</th><th>Deck</th><th>PWR</th><th>ADP</th><th>IRI</th></tr>')
+    for c in cards:
+        pwr = f"{c['pwr']:.2f}" if c.get("pwr") else "—"
+        adp = f"{c['adp']:.1f}" if c.get("adp") else "—"
+        deck = c.get("deck", "") or "—"
+        iri_path = c["id"]
+        parts.append(
+            f'<tr>'
+            f'<td><a href="/{_e(iri_path)}">{_e(c["name"])}</a></td>'
+            f'<td>{_e(deck)}</td>'
+            f'<td>{pwr}</td>'
+            f'<td>{adp}</td>'
+            f'<td class="iri" style="font-size:0.72rem"><a href="/{_e(iri_path)}">{_e(NS + iri_path)}</a></td>'
+            f'</tr>'
+        )
+    parts.append('</table>')
 
 
 # ── Full card Turtle builder ──────────────────────────────────────────────────
