@@ -466,54 +466,61 @@ def build_deck_page(deck: dict, cards_in_deck: list[dict]) -> str:
 # ── Full card Turtle builder ──────────────────────────────────────────────────
 
 def _card_triples(card: dict, use_prefix: bool = True) -> list[str]:
-    """Build all Turtle triples for a card. If use_prefix=True, uses : prefix;
-    otherwise uses full IRIs (for HTML display with &lt; escaping)."""
-    p = ":" if use_prefix else ""
+    """Build all Turtle triples for a card.
+
+    If *use_prefix* is True, subjects/objects use the ``:`` prefix
+    (compact Turtle for content-negotiated responses).
+    If False, subjects/objects use full ``<IRI>`` form
+    (for display inside ``<pre>`` on HTML pages).
+
+    Predicates always use the ``:`` prefix form, and typed literals
+    use ``xsd:`` datatype annotations matching the ontology.
+    """
     iri = lambda local: f":{local}" if use_prefix else f"<{NS}{local}>"
 
-    lines = [f'{iri(card["id"])} a {p}{card["type"]} ;']
+    lines = [f'{iri(card["id"])} a :{card["type"]} ;']
     lines.append(f'    rdfs:label "{card["name"]}"@en ;')
 
     if card.get("deck"):
-        lines.append(f'    {p}deck {iri("deck_" + card["deck"])} ;')
+        lines.append(f'    :deck {iri("deck_" + card["deck"])} ;')
 
     if card.get("text"):
         escaped = card["text"].replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-        lines.append(f'    {p}cardText "{escaped}"@en ;')
+        lines.append(f'    :cardText "{escaped}"@en ;')
 
     if card.get("costLabel"):
-        lines.append(f'    {p}hasCost {iri(card["cost"])} ;')
+        lines.append(f'    :hasCost {iri(card["cost"])} ;')
 
     if card.get("prerequisite"):
         escaped = card["prerequisite"].replace('"', '\\"')
-        lines.append(f'    {p}prerequisite "{escaped}" ;')
+        lines.append(f'    :prerequisite "{escaped}"^^xsd:string ;')
 
     if card.get("pwr"):
-        lines.append(f'    {p}pwr {card["pwr"]:.4f} ;')
+        lines.append(f'    :pwr "{card["pwr"]:.4f}"^^xsd:double ;')
 
     if card.get("adp"):
-        lines.append(f'    {p}adp {card["adp"]:.4f} ;')
+        lines.append(f'    :adp "{card["adp"]:.4f}"^^xsd:double ;')
 
     if card.get("playRatio"):
-        lines.append(f'    {p}playRatio {card["playRatio"]:.4f} ;')
+        lines.append(f'    :playRatio "{card["playRatio"]:.4f}"^^xsd:double ;')
 
     if card.get("winRatio"):
-        lines.append(f'    {p}winRatio {card["winRatio"]:.4f} ;')
+        lines.append(f'    :winRatio "{card["winRatio"]:.4f}"^^xsd:double ;')
 
     if card.get("banned"):
-        lines.append(f'    {p}banned true ;')
+        lines.append(f'    :banned "true"^^xsd:boolean ;')
 
     if card.get("isNo"):
-        lines.append(f'    {p}isNo true ;')
+        lines.append(f'    :isNo "true"^^xsd:boolean ;')
 
     for g in card.get("gains", []):
-        lines.append(f'    {p}gains {iri(g)} ;')
+        lines.append(f'    :gains {iri(g)} ;')
 
     for a in card.get("affects", []):
-        lines.append(f'    {p}affects {iri(a)} ;')
+        lines.append(f'    :affects {iri(a)} ;')
 
     for r in card.get("relations", []):
-        lines.append(f'    {p}relatedTo {iri(r)} ;')
+        lines.append(f'    :relatedTo {iri(r)} ;')
 
     # Replace last ; with .
     if lines[-1].endswith(" ;"):
@@ -536,10 +543,16 @@ def card_to_turtle(card: dict) -> str:
 
 
 def card_to_html_pre(card: dict) -> str:
-    """Return HTML-escaped Turtle for use inside a <pre> tag."""
-    lines = _card_triples(card, use_prefix=False)
-    # Escape < > for HTML display
-    return "\n".join(_e(line) for line in lines)
+    """Return HTML-escaped Turtle for use inside a <pre> tag.
+    Includes @prefix declarations so the : shorthand is valid Turtle."""
+    header = [
+        f'@prefix : &lt;{NS}&gt; .',
+        '@prefix rdfs: &lt;http://www.w3.org/2000/01/rdf-schema#&gt; .',
+        '@prefix xsd: &lt;http://www.w3.org/2001/XMLSchema#&gt; .',
+        '',
+    ]
+    lines = _card_triples(card, use_prefix=True)
+    return "\n".join(header + [_e(line) for line in lines])
 
 
 # ── About / documentation page ───────────────────────────────────────────────
