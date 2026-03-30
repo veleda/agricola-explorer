@@ -44,9 +44,15 @@ function shuffle(arr) {
   return a;
 }
 
-// NPC strategy (both Full and Mini): randomly pick one of the two best ADP cards
+// NPC strategy: pick one of the two best ADP cards, but every 5th pick is random
+let _npcPickCounter = 0;
 function npcPick(cards) {
   if (cards.length === 0) return null;
+  _npcPickCounter++;
+  // Every 5th pick: choose completely at random (makes NPCs less perfect)
+  if (_npcPickCounter % 5 === 0) {
+    return cards[Math.floor(Math.random() * cards.length)];
+  }
   const withAdp = cards.filter(c => c.adp > 0);
   if (withAdp.length > 0) {
     // Sort ascending: lower ADP = picked earlier in tournaments = stronger
@@ -59,6 +65,7 @@ function npcPick(cards) {
   const top = sorted.slice(0, Math.min(2, sorted.length));
   return top[Math.floor(Math.random() * top.length)];
 }
+function npcPickReset() { _npcPickCounter = 0; }
 
 // ── API helpers ─────────────────────────────────────────────────────────────
 async function saveDraft(username, draftType, picks, pickOrder, comment, combos) {
@@ -775,6 +782,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
 
   const startDraft = useCallback(() => {
     if (!canStart) return;
+    npcPickReset();
     if (isCombo) setComboPhase(1);
     setOccPicks([]);
     setOccPickOrder([]);
