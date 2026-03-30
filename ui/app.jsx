@@ -894,12 +894,63 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [handsDraftType, setHandsDraftType] = useState(null); // for linking from drafter
   const [explorerTheme, setExplorerTheme] = useState("light");
+  const [backupOpen, setBackupOpen] = useState(false);
+  const [backupMsg, setBackupMsg] = useState(null); // {text, type}
+  const restoreFileRef = useRef(null);
 
   // Auto-collapse sidebar when entering drafter/hands, expand when returning to explorer
   const setAppModeWithSidebar = useCallback((mode, opts) => {
     setAppMode(mode);
     setSidebarCollapsed(mode === "drafter" || mode === "hands" || mode === "score");
     if (opts?.draftType) setHandsDraftType(opts.draftType);
+  }, []);
+
+  // ── Backup / Restore handlers ─────────────────────────────────────────
+  const handleBackup = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/backup`);
+      const data = await res.json();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `agricola-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setBackupMsg({ text: `Backup: ${data.drafts.length} drafts, ${data.scores.length} scores`, type: "ok" });
+      setTimeout(() => setBackupMsg(null), 4000);
+      setBackupOpen(false);
+    } catch (err) {
+      setBackupMsg({ text: "Backup failed", type: "err" });
+      setTimeout(() => setBackupMsg(null), 4000);
+    }
+  }, []);
+
+  const handleRestore = useCallback(async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      const res = await fetch(`${API_BASE}/api/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Restore failed");
+      }
+      const result = await res.json();
+      setBackupMsg({ text: `Restored ${result.draftsAdded} drafts, ${result.scoresAdded} scores`, type: "ok" });
+      setTimeout(() => setBackupMsg(null), 4000);
+      setBackupOpen(false);
+    } catch (err) {
+      setBackupMsg({ text: "Restore failed: " + err.message, type: "err" });
+      setTimeout(() => setBackupMsg(null), 4000);
+    } finally {
+      if (restoreFileRef.current) restoreFileRef.current.value = "";
+    }
   }, []);
 
   // Compute theme object
@@ -1320,6 +1371,31 @@ export default function App() {
             borderBottom: `1px solid ${E.border}`, gap: 8, flexShrink: 0,
           }}>
             {mobileModeSwitcher}
+            <div style={{ marginLeft: "auto", position: "relative" }}>
+              <button onClick={() => setBackupOpen(o => !o)} style={{
+                background: backupOpen ? E.blue + "22" : E.bg, border: `1px solid ${backupOpen ? E.blue : E.border}`, borderRadius: 8,
+                color: backupOpen ? E.blue : E.textFaint, padding: "6px 10px", fontSize: 11, cursor: "pointer",
+              }}>{"\uD83D\uDCBE"}</button>
+              {backupOpen && (
+                <>
+                  <div onClick={() => setBackupOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 99 }} />
+                  <div style={{
+                    position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 100,
+                    background: E.surface, border: `1px solid ${E.border}`, borderRadius: 10,
+                    padding: 8, minWidth: 170, boxShadow: "0 4px 16px rgba(0,0,0,0.15)",
+                    display: "flex", flexDirection: "column", gap: 4,
+                  }}>
+                    <button onClick={handleBackup} style={{ padding: "8px 10px", borderRadius: 6, border: "none", background: "transparent", color: E.text, fontSize: 12, cursor: "pointer", textAlign: "left" }}>
+                      {"\u2B07"} Export backup
+                    </button>
+                    <input ref={restoreFileRef} type="file" accept=".json" onChange={handleRestore} style={{ display: "none" }} />
+                    <button onClick={() => restoreFileRef.current?.click()} style={{ padding: "8px 10px", borderRadius: 6, border: "none", background: "transparent", color: E.text, fontSize: 12, cursor: "pointer", textAlign: "left" }}>
+                      {"\u2B06"} Import backup
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
           <div style={{ flex: 1, overflow: "hidden" }}>
             {appMode === "drafter"
@@ -1378,6 +1454,33 @@ export default function App() {
           }}>
             {"\uD83D\uDD0D"}
           </button>
+
+          {/* Backup */}
+          <div style={{ position: "relative" }}>
+            <button onClick={() => setBackupOpen(o => !o)} style={{
+              background: backupOpen ? E.blue + "22" : E.bg, border: `1px solid ${backupOpen ? E.blue : E.border}`, borderRadius: 8,
+              color: backupOpen ? E.blue : E.textFaint, padding: "6px 10px", fontSize: 11, cursor: "pointer",
+            }}>{"\uD83D\uDCBE"}</button>
+            {backupOpen && (
+              <>
+                <div onClick={() => setBackupOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 99 }} />
+                <div style={{
+                  position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 100,
+                  background: E.surface, border: `1px solid ${E.border}`, borderRadius: 10,
+                  padding: 8, minWidth: 170, boxShadow: "0 4px 16px rgba(0,0,0,0.15)",
+                  display: "flex", flexDirection: "column", gap: 4,
+                }}>
+                  <button onClick={handleBackup} style={{ padding: "8px 10px", borderRadius: 6, border: "none", background: "transparent", color: E.text, fontSize: 12, cursor: "pointer", textAlign: "left" }}>
+                    {"\u2B07"} Export backup
+                  </button>
+                  <input ref={restoreFileRef} type="file" accept=".json" onChange={handleRestore} style={{ display: "none" }} />
+                  <button onClick={() => restoreFileRef.current?.click()} style={{ padding: "8px 10px", borderRadius: 6, border: "none", background: "transparent", color: E.text, fontSize: 12, cursor: "pointer", textAlign: "left" }}>
+                    {"\u2B06"} Import backup
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
 
         {/* SPARQL Editor (below header on mobile too) */}
@@ -1562,7 +1665,70 @@ export default function App() {
               color: explorerTheme === "light" ? E.blue : E.textMuted,
               fontSize: 12, cursor: "pointer", transition: "all 0.15s",
             }}>{"\u2600\uFE0F"}</button>
+
+          {/* Backup / Restore dropdown */}
+          <div style={{ position: "relative" }}>
+            <button onClick={() => setBackupOpen(o => !o)}
+              style={{
+                padding: "6px 10px", borderRadius: 6, border: `1px solid ${backupOpen ? E.blue : E.border}`,
+                background: backupOpen ? E.blue + "22" : "transparent",
+                color: backupOpen ? E.blue : E.textMuted,
+                fontSize: 12, cursor: "pointer", transition: "all 0.15s",
+              }} title="Backup & Restore">{"\uD83D\uDCBE"}</button>
+            {backupOpen && (
+              <>
+                <div onClick={() => setBackupOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 99 }} />
+                <div style={{
+                  position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 100,
+                  background: E.surface, border: `1px solid ${E.border}`, borderRadius: 10,
+                  padding: 8, minWidth: 180, boxShadow: "0 4px 16px rgba(0,0,0,0.15)",
+                  display: "flex", flexDirection: "column", gap: 4,
+                }}>
+                  <div style={{ fontSize: 10, color: E.textDim, textTransform: "uppercase", letterSpacing: 0.5, padding: "4px 8px", fontWeight: 600 }}>
+                    Data Backup
+                  </div>
+                  <button onClick={handleBackup}
+                    style={{
+                      padding: "8px 12px", borderRadius: 6, border: "none",
+                      background: "transparent", color: E.text, fontSize: 12,
+                      cursor: "pointer", textAlign: "left", display: "flex", alignItems: "center", gap: 8,
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = E.surfaceAlt}
+                    onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                  >
+                    <span>{"\u2B07"}</span> Export backup
+                  </button>
+                  <input ref={restoreFileRef} type="file" accept=".json" onChange={handleRestore} style={{ display: "none" }} />
+                  <button onClick={() => restoreFileRef.current?.click()}
+                    style={{
+                      padding: "8px 12px", borderRadius: 6, border: "none",
+                      background: "transparent", color: E.text, fontSize: 12,
+                      cursor: "pointer", textAlign: "left", display: "flex", alignItems: "center", gap: 8,
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = E.surfaceAlt}
+                    onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                  >
+                    <span>{"\u2B06"}</span> Import backup
+                  </button>
+                  <div style={{ fontSize: 10, color: E.textDim, padding: "2px 8px" }}>
+                    Includes scores, drafts & hands
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         </div>
+        {backupMsg && (
+          <div style={{
+            position: "fixed", top: 12, right: 12, zIndex: 200,
+            padding: "8px 16px", borderRadius: 8, fontSize: 12, fontWeight: 600,
+            background: backupMsg.type === "ok" ? "#10b98122" : "#ef444422",
+            color: backupMsg.type === "ok" ? "#10b981" : "#ef4444",
+            border: `1px solid ${backupMsg.type === "ok" ? "#10b98144" : "#ef444444"}`,
+          }}>
+            {backupMsg.text}
+          </div>
+        )}
       </div>
 
       {/* Main flex row: sidebar + content */}
