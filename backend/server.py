@@ -30,7 +30,7 @@ from urllib.parse import unquote
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse, Response
+from fastapi.responses import JSONResponse, FileResponse, Response, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -125,7 +125,7 @@ def _build_cards_json() -> list[dict]:
             "id": r.get("Card_ID", ""),
             "name": r.get("Name", ""),
             "type": _strip(r.get("Type", "")),
-            "deck": r.get("Deck", "") or "",
+            "deck": r.get("DeckLabel", "") or "",
             "winRatio": round(r.get("win_ratio") or 0, 4),
             "playRatio": round(r.get("play_ratio") or 0, 4),
             "pwr": round(r.get("PWR") or 0, 2),
@@ -664,6 +664,19 @@ def delete_score(score_id: str, req: ScoreDeleteRequest):
 
 # ── Backup / Restore ─────────────────────────────────────────────────────────
 
+@app.get("/api/export-rdf")
+def export_rdf():
+    """Export the full card knowledge graph as Turtle RDF."""
+    ttl = model.writes(format="turtle")
+    return Response(
+        content=ttl,
+        media_type="text/turtle",
+        headers={
+            "Content-Disposition": 'attachment; filename="agricola-cards.ttl"',
+        },
+    )
+
+
 @app.get("/api/backup")
 def backup_data():
     """Export all drafts and scores as a single JSON download."""
@@ -906,14 +919,142 @@ async def image_proxy(url: str = ""):
     except Exception as e:
         return JSONResponse(status_code=502, content={"error": str(e)})
 
+# ── Linked Data: dereferenceable IRIs ────────────────────────────────────────
+
+try:
+    import linked_data as ld
+except ModuleNotFoundError:
+    from backend import linked_data as ld
+
+# Pre-build lookups for Linked Data pages
+_CARDS_BY_ID: dict[str, dict] = {c["id"]: c for c in ALL_CARDS}
+
+# Build deck metadata from ontology for the docs page
+_DECK_INFO: list[dict] = []
+for code, iri in sorted(de.DECK_CODE_TO_IRI.items(), key=lambda x: x[1]):
+    local = iri.replace(de.ns, "")
+    # Read metadata from ontology data embedded in the cards
+    _DECK_INFO.append({
+        "local": local,
+        "code": code,
+        "label": local.replace("deck_", "").replace("Revised", "Revised "),
+        "description": "",
+        "year": None,
+        "publisher": "",
+        "compatible": [],
+    })
+
+# Enrich deck info from the ontology.ttl (parsed by maplib)
+try:
+    _deck_q = model.query("""
+        PREFIX : <http://agricola.veronahe.no/>
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        SELECT ?deck ?label ?code ?desc ?year ?pub ?compat WHERE {
+            ?deck a :Deck .
+            OPTIONAL { ?deck rdfs:label ?label }
+            OPTIONAL { ?deck :deckCode ?code }
+            OPTIONAL { ?deck :description ?desc }
+            OPTIONAL { ?deck :year ?year }
+            OPTIONAL { ?deck :publisher ?pub }
+            OPTIONAL { ?deck :compatibleWith ?compat }
+        }
+    """)
+    _deck_meta: dict[str, dict] = {}
+    for row in _deck_q.iter_rows(named=True):
+        deck_iri = str(row.get("deck", "")).strip("<>")
+        local = deck_iri.replace(de.ns, "")
+        if local not in _deck_meta:
+            _deck_meta[local] = {
+                "local": local,
+                "code": str(row.get("code", "") or ""),
+                "label": str(row.get("label", "") or local).strip('"').split('"')[0],
+                "description": str(row.get("desc", "") or "").strip('"').split('"')[0],
+                "year": None,
+                "publisher": str(row.get("pub", "") or "").strip('"').split('"')[0],
+                "compatible": [],
+            }
+            try:
+                _deck_meta[local]["year"] = int(float(str(row.get("year", "") or "0")))
+            except (ValueError, TypeError):
+                pass
+        compat_iri = str(row.get("compat", "") or "").strip("<>").replace(de.ns, "")
+        if compat_iri and compat_iri not in _deck_meta[local]["compatible"]:
+            _deck_meta[local]["compatible"].append(compat_iri)
+    _DECK_INFO = sorted(_deck_meta.values(), key=lambda d: (d.get("year") or 9999, d["code"]))
+    print(f"  {len(_DECK_INFO)} deck instances loaded for Linked Data.")
+except Exception as e:
+    print(f"  Warning: could not query deck metadata: {e}")
+
+_DECK_BY_LOCAL: dict[str, dict] = {d["local"]: d for d in _DECK_INFO}
+
+# Pre-generate ontology page (static, only changes at deploy)
+print("Building ontology documentation page …")
+_ONTOLOGY_HTML = ld.build_ontology_page(ALL_CARDS, _DECK_INFO)
+print("  Ontology page ready.")
+
+print("Building about page …")
+_ABOUT_HTML = ld.build_about_page(len(ALL_CARDS), len(_DECK_INFO))
+print("  About page ready.")
+
+
+def _wants_turtle(request: Request) -> bool:
+    """Check if the client prefers Turtle over HTML."""
+    accept = request.headers.get("accept", "")
+    fmt = request.query_params.get("format", "")
+    return fmt == "turtle" or "text/turtle" in accept
+
+
+@app.get("/about")
+def about_page():
+    return HTMLResponse(_ABOUT_HTML)
+
+
+@app.get("/ontology")
+def ontology_page(request: Request):
+    if _wants_turtle(request):
+        ont_path = os.path.join(PROJECT_ROOT, "ontology.ttl")
+        with open(ont_path, "r") as f:
+            return Response(content=f.read(), media_type="text/turtle")
+    return HTMLResponse(_ONTOLOGY_HTML)
+
+
+@app.get("/deck_{code:path}")
+def deck_page(code: str, request: Request):
+    local = f"deck_{code}"
+    deck = _DECK_BY_LOCAL.get(local)
+    if not deck:
+        return JSONResponse(status_code=404, content={"error": "Deck not found"})
+    cards_in_deck = [c for c in ALL_CARDS if c["deck"] == deck["code"]]
+    if _wants_turtle(request):
+        # Return relevant triples from the model
+        ttl = model.writes(format="turtle")
+        # Filter to just this deck's triples (simple approach)
+        return Response(content=ttl, media_type="text/turtle")
+    html = ld.build_deck_page(deck, cards_in_deck)
+    return HTMLResponse(html)
+
+
 # ── Serve static frontend (after build) ─────────────────────────────────────
 
 DIST_DIR = os.path.join(os.path.dirname(__file__), "..", "ui", "dist")
+
+# UUID regex for card IRIs
+import re as _re
+_UUID_RE = _re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+
 if os.path.isdir(DIST_DIR):
     app.mount("/assets", StaticFiles(directory=os.path.join(DIST_DIR, "assets")), name="assets")
 
     @app.get("/{full_path:path}")
-    def serve_spa(full_path: str):
+    def serve_spa(full_path: str, request: Request):
+        # Card IRI: if path is a UUID, serve the card page
+        if _UUID_RE.match(full_path):
+            card = _CARDS_BY_ID.get(full_path)
+            if card:
+                if _wants_turtle(request):
+                    return Response(content=ld.card_to_turtle(card), media_type="text/turtle")
+                return HTMLResponse(ld.build_card_page(card, _CARDS_BY_ID))
+
         # Try exact file first, then fallback to index.html (SPA routing)
         file_path = os.path.join(DIST_DIR, full_path)
         if full_path and os.path.isfile(file_path):

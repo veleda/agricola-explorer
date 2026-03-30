@@ -6,7 +6,7 @@
     ? xsd:string ?Card_ID,
      xsd:string ?Name,
     ? ottr:IRI ?Type,
-    ? xsd:string ?Deck,
+    ? ottr:IRI ?Deck,
     ? xsd:string ?Players,
     ? xsd:string ?Cost,
     ? xsd:string ?Prerequisite,

@@ -34,14 +34,237 @@
     rdfs:label "Cost Permutation"@en ;
     rdfs:comment "A unique combination of resources required to play a card."@en .
 
+:Deck a owl:Class ;
+    rdfs:label "Deck"@en ;
+    rdfs:comment "A named card deck or expansion for Agricola."@en .
+
+:Edition a owl:Class ;
+    rdfs:label "Edition"@en ;
+    rdfs:comment "A major Agricola game edition."@en .
+
+# ── Edition instances ─────────────────────────────────────────────────────────
+
+:Original a :Edition ;
+    rdfs:label "Original Agricola"@en ;
+    :year 2007 .
+
+:Revised a :Edition ;
+    rdfs:label "Agricola Revised Edition"@en ;
+    :year 2016 .
+
+# ── Deck instances ────────────────────────────────────────────────────────────
+
+:deck_E a :Deck ;
+    rdfs:label "E Deck"@en ;
+    :deckCode "E" ;
+    :description "Base game Beginner (Einsteiger) deck. Part of original E/I/K base game decks."@en ;
+    :year 2007 ;
+    :publisher "Z-Man" ;
+    :compatibleWith :Original .
+
+:deck_I a :Deck ;
+    rdfs:label "I Deck"@en ;
+    :deckCode "I" ;
+    :description "Base game Intermediate (Interaktiv) deck. Part of original E/I/K base game decks."@en ;
+    :year 2007 ;
+    :publisher "Z-Man" ;
+    :compatibleWith :Original .
+
+:deck_K a :Deck ;
+    rdfs:label "K Deck"@en ;
+    :deckCode "K" ;
+    :description "Base game Advanced (Komplex) deck. Part of original E/I/K base game decks."@en ;
+    :year 2007 ;
+    :publisher "Z-Man" ;
+    :compatibleWith :Original .
+
+:deck_Z a :Deck ;
+    rdfs:label "Z Deck"@en ;
+    :deckCode "Z" ;
+    :description "Promo deck for the first Z-Man English printing. 12 Minors and 12 Occupations."@en ;
+    :year 2008 ;
+    :publisher "Z-Man" ;
+    :compatibleWith :Original, :Revised .
+
+:deck_O a :Deck ;
+    rdfs:label "Ö Deck"@en ;
+    :deckCode "O" ;
+    :description "Austria-themed deck. 12 Minors and 12 Occupations."@en ;
+    :year 2008 ;
+    :publisher "Z-Man" ;
+    :compatibleWith :Original, :Revised .
+
+:deck_Cz a :Deck ;
+    rdfs:label "CZ Deck"@en ;
+    :deckCode "Cz" ;
+    :description "Czech Republic-themed deck. 12 Minors and 12 Occupations."@en ;
+    :year 2009 ;
+    :publisher "Z-Man" ;
+    :compatibleWith :Original, :Revised .
+
+:deck_G a :Deck ;
+    rdfs:label "Gamers' Deck"@en ;
+    :deckCode "G" ;
+    :description "Developed and tested by Play-Agricola users to fill gaps in gameplay. 56 Minors and 60 Occupations."@en ;
+    :year 2010 ;
+    :publisher "Z-Man" ;
+    :compatibleWith :Original, :Revised .
+
+:deck_G4 a :Deck ;
+    rdfs:label "Gamers' Deck G4"@en ;
+    :deckCode "G4" ;
+    :description "Gamers' Deck sub-group 4."@en ;
+    :year 2010 ;
+    :publisher "Z-Man" ;
+    :compatibleWith :Original, :Revised .
+
+:deck_G5 a :Deck ;
+    rdfs:label "Gamers' Deck G5"@en ;
+    :deckCode "G5" ;
+    :description "Gamers' Deck sub-group 5."@en ;
+    :year 2010 ;
+    :publisher "Z-Man" ;
+    :compatibleWith :Original, :Revised .
+
+:deck_G6 a :Deck ;
+    rdfs:label "Gamers' Deck G6"@en ;
+    :deckCode "G6" ;
+    :description "Gamers' Deck sub-group 6."@en ;
+    :year 2010 ;
+    :publisher "Z-Man" ;
+    :compatibleWith :Original, :Revised .
+
+:deck_G7 a :Deck ;
+    rdfs:label "Gamers' Deck G7"@en ;
+    :deckCode "G7" ;
+    :description "Gamers' Deck sub-group 7."@en ;
+    :year 2010 ;
+    :publisher "Z-Man" ;
+    :compatibleWith :Original, :Revised .
+
+:deck_G8 a :Deck ;
+    rdfs:label "Gamers' Deck G8"@en ;
+    :deckCode "G8" ;
+    :description "Gamers' Deck sub-group 8."@en ;
+    :year 2010 ;
+    :publisher "Z-Man" ;
+    :compatibleWith :Original, :Revised .
+
+:deck_NL a :Deck ;
+    rdfs:label "NL Deck"@en ;
+    :deckCode "NL" ;
+    :description "Netherlands-themed deck. 60 Minors and 60 Occupations."@en ;
+    :year 2011 ;
+    :publisher "Z-Man" ;
+    :compatibleWith :Original, :Revised .
+
+:deck_Wm a :Deck ;
+    rdfs:label "World Championship Deck"@en ;
+    :deckCode "Wm" ;
+    :description "Created for the first Agricola World Championship in Vienna. Divided into 5 sub-decks. 60 Minors and 55 Occupations."@en ;
+    :year 2011 ;
+    :publisher "Z-Man" ;
+    :compatibleWith :Original, :Revised .
+
+:deck_FL a :Deck ;
+    rdfs:label "Flanders Deck"@en ;
+    :deckCode "FL" ;
+    :description "Part of the Belgium Deck. Flanders-themed. Can be played standalone or shuffled with other decks."@en ;
+    :year 2012 ;
+    :publisher "Z-Man" ;
+    :compatibleWith :Original, :Revised .
+
+:deck_WA a :Deck ;
+    rdfs:label "Wallonia Deck"@en ;
+    :deckCode "WA" ;
+    :description "Part of the Belgium Deck. Wallonia-themed. Can be played standalone or shuffled with other decks."@en ;
+    :year 2012 ;
+    :publisher "Z-Man" ;
+    :compatibleWith :Original, :Revised .
+
+:deck_Pi a :Deck ;
+    rdfs:label "Pi Deck"@en ;
+    :deckCode "Pi" ;
+    :description "Designed by Play-Agricola users. Meant to be mixed with the WM deck for 5-player tournaments. 12 Minors and 12 Occupations."@en ;
+    :year 2012 ;
+    :publisher "Z-Man" ;
+    :compatibleWith :Original, :Revised .
+
+:deck_BI a :Deck ;
+    rdfs:label "Bielefeld Deck"@en ;
+    :deckCode "BI" ;
+    :description "Cards relating to the German city of Bielefeld. 13 Minors and 11 Occupations."@en ;
+    :year 2013 ;
+    :publisher "Z-Man" ;
+    :compatibleWith :Original, :Revised .
+
+:deck_Fr a :Deck ;
+    rdfs:label "France Deck"@en ;
+    :deckCode "Fr" ;
+    :description "France-themed deck. 60 Minors and 60 Occupations."@en ;
+    :year 2014 ;
+    :publisher "Z-Man" ;
+    :compatibleWith :Original, :Revised .
+
+:deck_RevisedA a :Deck ;
+    rdfs:label "Revised A Deck"@en ;
+    :deckCode "Revised A" ;
+    :description "Base game deck A for Agricola Revised Edition. 48 Minors and 48 Occupations."@en ;
+    :year 2016 ;
+    :publisher "Mayfair" ;
+    :compatibleWith :Revised .
+
+:deck_RevisedB a :Deck ;
+    rdfs:label "Revised B Deck"@en ;
+    :deckCode "Revised B" ;
+    :description "Base game deck B for Agricola Revised Edition. 48 Minors and 48 Occupations."@en ;
+    :year 2016 ;
+    :publisher "Mayfair" ;
+    :compatibleWith :Revised .
+
+:deck_RevisedD a :Deck ;
+    rdfs:label "Revised D Deck"@en ;
+    :deckCode "Revised D" ;
+    :description "Dulcinaria expansion deck for Agricola Revised Edition. 60 Minors and 60 Occupations."@en ;
+    :year 2020 ;
+    :publisher "Mayfair" ;
+    :compatibleWith :Original, :Revised .
+
+:deck_RevisedE a :Deck ;
+    rdfs:label "Revised E Deck"@en ;
+    :deckCode "Revised E" ;
+    :description "Ephipparius expansion deck for Agricola Revised Edition. 84 Minors and 84 Occupations."@en ;
+    :year 2023 ;
+    :publisher "Mayfair" ;
+    :compatibleWith :Original, :Revised .
+
+:deck_MD1 a :Deck ;
+    rdfs:label "Mini Deck 1"@en ;
+    :deckCode "MD1" ;
+    :description "Mini Deck 1 promo cards."@en ;
+    :compatibleWith :Original, :Revised .
+
+:deck_MD2 a :Deck ;
+    rdfs:label "Mini Deck 2"@en ;
+    :deckCode "MD2" ;
+    :description "Mini Deck 2 promo cards."@en ;
+    :compatibleWith :Original, :Revised .
+
+:deck_MI a :Deck ;
+    rdfs:label "MI Deck"@en ;
+    :deckCode "MI" ;
+    :description "Miscellaneous/independent cards."@en ;
+    :compatibleWith :Original, :Revised .
+
+:deck_Unassigned a :Deck ;
+    rdfs:label "Unassigned"@en ;
+    :deckCode "Unassigned" ;
+    :description "Cards not assigned to a specific deck."@en .
+
 # ── Datatype properties (card attributes) ────────────────────────────────────
 
 :id a owl:DatatypeProperty ;
     rdfs:label "card ID"@en ;
-    rdfs:range xsd:string .
-
-:deck a owl:DatatypeProperty ;
-    rdfs:label "deck"@en ;
     rdfs:range xsd:string .
 
 :players a owl:DatatypeProperty ;
@@ -131,6 +354,34 @@
 :costValue a owl:ObjectProperty ;
     rdfs:label "cost value"@en ;
     rdfs:comment "Special cost resource reference."@en .
+
+:deck a owl:ObjectProperty ;
+    rdfs:label "deck"@en ;
+    rdfs:comment "The deck this card belongs to."@en ;
+    rdfs:range :Deck .
+
+:compatibleWith a owl:ObjectProperty ;
+    rdfs:label "compatible with"@en ;
+    rdfs:comment "Agricola edition this deck is compatible with."@en ;
+    rdfs:domain :Deck ;
+    rdfs:range :Edition .
+
+:deckCode a owl:DatatypeProperty ;
+    rdfs:label "deck code"@en ;
+    rdfs:comment "Short letter code identifying this deck."@en ;
+    rdfs:range xsd:string .
+
+:description a owl:DatatypeProperty ;
+    rdfs:label "description"@en ;
+    rdfs:range xsd:string .
+
+:year a owl:DatatypeProperty ;
+    rdfs:label "year"@en ;
+    rdfs:range xsd:integer .
+
+:publisher a owl:DatatypeProperty ;
+    rdfs:label "publisher"@en ;
+    rdfs:range xsd:string .
 
 # ── Datatype properties (cost permutation resources) ─────────────────────────
 

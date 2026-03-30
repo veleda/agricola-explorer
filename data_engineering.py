@@ -5,6 +5,45 @@ import polars as pl
 
 ns = "http://agricola.veronahe.no/"
 
+# ─── Deck code → IRI mapping ─────────────────────────────────────────────────
+
+DECK_CODE_TO_IRI = {
+    "E":          ns + "deck_E",
+    "I":          ns + "deck_I",
+    "K":          ns + "deck_K",
+    "Z":          ns + "deck_Z",
+    "O":          ns + "deck_O",
+    "Cz":         ns + "deck_Cz",
+    "G":          ns + "deck_G",
+    "G4":         ns + "deck_G4",
+    "G5":         ns + "deck_G5",
+    "G6":         ns + "deck_G6",
+    "G7":         ns + "deck_G7",
+    "G8":         ns + "deck_G8",
+    "NL":         ns + "deck_NL",
+    "Wm":         ns + "deck_Wm",
+    "FL":         ns + "deck_FL",
+    "WA":         ns + "deck_WA",
+    "Pi":         ns + "deck_Pi",
+    "BI":         ns + "deck_BI",
+    "Fr":         ns + "deck_Fr",
+    "Revised A":  ns + "deck_RevisedA",
+    "Revised B":  ns + "deck_RevisedB",
+    "Revised D":  ns + "deck_RevisedD",
+    "Revised E":  ns + "deck_RevisedE",
+    "MD1":        ns + "deck_MD1",
+    "MD2":        ns + "deck_MD2",
+    "MI":         ns + "deck_MI",
+    "Unassigned": ns + "deck_Unassigned",
+}
+
+
+def deck_code_to_iri(code: str) -> str | None:
+    """Convert a deck letter code to its full IRI."""
+    if not code or not code.strip():
+        return None
+    return DECK_CODE_TO_IRI.get(code.strip())
+
 
 # ─── Cost parsing helpers ─────────────────────────────────────────────────────
 
@@ -375,6 +414,7 @@ def load_cards(json_path: str = "data/cards.json",
         # Use first deck for primary deck column; keep all decks as comma-sep
         decks = c.get("decks") or []
         primary_deck = decks[0] if decks else ""
+        primary_deck_iri = deck_code_to_iri(primary_deck)
         all_decks = ",".join(decks)
 
         # Cost string: new JSON uses "1W,1C" with commas → replace with spaces
@@ -422,7 +462,8 @@ def load_cards(json_path: str = "data/cards.json",
             "Card_ID": c.get("card_uuid", ""),
             "Name": name,
             "Type": c.get("card_type", ""),
-            "Deck": primary_deck,
+            "Deck": primary_deck_iri,
+            "DeckLabel": primary_deck,
             "Decks": all_decks,
             "Players": str(c.get("min_no_players") or "") if c.get("min_no_players") else None,
             "Cost": cost_raw or None,
@@ -681,5 +722,6 @@ card_combos = build_card_combos(cards, card_gains, card_affects, card_relations)
 
 # Columns the OTTR Card template does NOT know about – drop before maplib mapping
 _EXTRA_COLS = {"image_url", "card_creator", "is_passing_minor", "Decks",
-               "PWRcorr", "Deck2", "has_bonus_symbol", "PWR_raw", "ADP_raw"}
+               "PWRcorr", "Deck2", "has_bonus_symbol", "PWR_raw", "ADP_raw",
+               "DeckLabel"}
 cards_for_rdf = cards.drop([c for c in _EXTRA_COLS if c in cards.columns])
