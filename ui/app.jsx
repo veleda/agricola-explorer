@@ -1376,7 +1376,7 @@ export default function App() {
 
           {/* Footer */}
           <div style={{ position: "relative", zIndex: 2, textAlign: "center", padding: "14px 20px", fontSize: 10, color: "rgba(255,255,255,0.4)" }}>
-            Agricola NO {"\u00B7"} Norwegian Tournament Companion
+            <a href="/about" style={{ color: "rgba(255,255,255,0.4)", textDecoration: "none" }}>App documentation</a>
           </div>
         </div>
       );
@@ -1391,40 +1391,7 @@ export default function App() {
             borderBottom: `1px solid ${E.border}`, gap: 8, flexShrink: 0,
           }}>
             {mobileModeSwitcher}
-            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
-              <div style={{ position: "relative" }}>
-                <button onClick={() => setBackupOpen(o => !o)} style={{
-                  background: backupOpen ? E.blue + "22" : E.bg, border: `1px solid ${backupOpen ? E.blue : E.border}`, borderRadius: 8,
-                  color: backupOpen ? E.blue : E.textFaint, padding: "6px 10px", fontSize: 11, cursor: "pointer",
-                }}>{"\uD83D\uDCBE"}</button>
-                {backupOpen && (
-                  <>
-                    <div onClick={() => setBackupOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 99 }} />
-                    <div style={{
-                      position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 100,
-                      background: E.surface, border: `1px solid ${E.border}`, borderRadius: 10,
-                      padding: 8, minWidth: 170, boxShadow: "0 4px 16px rgba(0,0,0,0.15)",
-                      display: "flex", flexDirection: "column", gap: 4,
-                    }}>
-                      <button onClick={handleBackup} style={{ padding: "8px 10px", borderRadius: 6, border: "none", background: "transparent", color: E.text, fontSize: 12, cursor: "pointer", textAlign: "left" }}>
-                        {"\u2B07"} Export backup
-                      </button>
-                      <input ref={restoreFileRef} type="file" accept=".json" onChange={handleRestore} style={{ display: "none" }} />
-                      <button onClick={() => restoreFileRef.current?.click()} style={{ padding: "8px 10px", borderRadius: 6, border: "none", background: "transparent", color: E.text, fontSize: 12, cursor: "pointer", textAlign: "left" }}>
-                        {"\u2B06"} Import backup
-                      </button>
-                      <div style={{ height: 1, background: E.border, margin: "2px 8px" }} />
-                      <button onClick={handleExportRdf} style={{ padding: "8px 10px", borderRadius: 6, border: "none", background: "transparent", color: E.text, fontSize: 12, cursor: "pointer", textAlign: "left" }}>
-                        {"\uD83C\uDF10"} Export cards RDF
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-              <a href="/about" target="_blank" rel="noopener" style={{
-                background: E.bg, border: `1px solid ${E.border}`, borderRadius: 8,
-                color: E.textFaint, padding: "6px 10px", fontSize: 11, cursor: "pointer", textDecoration: "none",
-              }}>{"\u2139\uFE0F"}</a>
+            <div style={{ marginLeft: "auto" }}>
             </div>
           </div>
           <div style={{ flex: 1, overflow: "hidden" }}>
@@ -1485,40 +1452,6 @@ export default function App() {
             {"\uD83D\uDD0D"}
           </button>
 
-          {/* Backup */}
-          <div style={{ position: "relative" }}>
-            <button onClick={() => setBackupOpen(o => !o)} style={{
-              background: backupOpen ? E.blue + "22" : E.bg, border: `1px solid ${backupOpen ? E.blue : E.border}`, borderRadius: 8,
-              color: backupOpen ? E.blue : E.textFaint, padding: "6px 10px", fontSize: 11, cursor: "pointer",
-            }}>{"\uD83D\uDCBE"}</button>
-            {backupOpen && (
-              <>
-                <div onClick={() => setBackupOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 99 }} />
-                <div style={{
-                  position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 100,
-                  background: E.surface, border: `1px solid ${E.border}`, borderRadius: 10,
-                  padding: 8, minWidth: 170, boxShadow: "0 4px 16px rgba(0,0,0,0.15)",
-                  display: "flex", flexDirection: "column", gap: 4,
-                }}>
-                  <button onClick={handleBackup} style={{ padding: "8px 10px", borderRadius: 6, border: "none", background: "transparent", color: E.text, fontSize: 12, cursor: "pointer", textAlign: "left" }}>
-                    {"\u2B07"} Export backup
-                  </button>
-                  <input ref={restoreFileRef} type="file" accept=".json" onChange={handleRestore} style={{ display: "none" }} />
-                  <button onClick={() => restoreFileRef.current?.click()} style={{ padding: "8px 10px", borderRadius: 6, border: "none", background: "transparent", color: E.text, fontSize: 12, cursor: "pointer", textAlign: "left" }}>
-                    {"\u2B06"} Import backup
-                  </button>
-                  <div style={{ height: 1, background: E.border, margin: "2px 8px" }} />
-                  <button onClick={handleExportRdf} style={{ padding: "8px 10px", borderRadius: 6, border: "none", background: "transparent", color: E.text, fontSize: 12, cursor: "pointer", textAlign: "left" }}>
-                    {"\uD83C\uDF10"} Export cards RDF
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-          <a href="/about" target="_blank" rel="noopener" style={{
-            background: E.bg, border: `1px solid ${E.border}`, borderRadius: 8,
-            color: E.textFaint, padding: "6px 10px", fontSize: 11, cursor: "pointer", textDecoration: "none",
-          }}>{"\u2139\uFE0F"}</a>
         </div>
 
         {/* SPARQL Editor (below header on mobile too) */}
