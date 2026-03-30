@@ -662,6 +662,84 @@ def delete_score(score_id: str, req: ScoreDeleteRequest):
     return {"ok": True}
 
 
+# ── Backup / Restore ─────────────────────────────────────────────────────────
+
+@app.get("/api/backup")
+def backup_data():
+    """Export all drafts and scores as a single JSON download."""
+    conn = _get_db()
+
+    drafts = []
+    for row in conn.execute("SELECT * FROM drafts ORDER BY timestamp DESC").fetchall():
+        d = dict(row)
+        d["picks"] = json.loads(d["picks"])
+        d["pickOrder"] = json.loads(d["pickOrder"])
+        if d.get("combos"):
+            d["combos"] = json.loads(d["combos"])
+        drafts.append(d)
+
+    scores = []
+    for row in conn.execute("SELECT * FROM scores ORDER BY timestamp DESC").fetchall():
+        d = dict(row)
+        d["values"] = json.loads(d.pop("valuesJson"))
+        d["points"] = json.loads(d.pop("pointsJson"))
+        d["cardLog"] = json.loads(d["cardLog"]) if d.get("cardLog") else None
+        scores.append(d)
+
+    conn.close()
+
+    return {
+        "version": 1,
+        "exportedAt": datetime.datetime.utcnow().isoformat() + "Z",
+        "drafts": drafts,
+        "scores": scores,
+    }
+
+
+@app.post("/api/restore")
+async def restore_data(request: Request):
+    """Import drafts and scores from a backup JSON. Skips duplicates by ID."""
+    body = await request.json()
+
+    if body.get("version") != 1:
+        return JSONResponse(status_code=400, content={"error": "Unknown backup format"})
+
+    conn = _get_db()
+    drafts_added = 0
+    scores_added = 0
+
+    for d in body.get("drafts", []):
+        existing = conn.execute("SELECT id FROM drafts WHERE id = ?", (d["id"],)).fetchone()
+        if existing:
+            continue
+        conn.execute(
+            "INSERT INTO drafts (id, username, draftType, picks, pickOrder, timestamp, comment, picksHash, combos) VALUES (?,?,?,?,?,?,?,?,?)",
+            (d["id"], d.get("username", ""), d.get("draftType", ""),
+             json.dumps(d.get("picks", [])), json.dumps(d.get("pickOrder", [])),
+             d.get("timestamp", ""), d.get("comment", ""),
+             d.get("picksHash", ""), json.dumps(d.get("combos", []))),
+        )
+        drafts_added += 1
+
+    for s in body.get("scores", []):
+        existing = conn.execute("SELECT id FROM scores WHERE id = ?", (s["id"],)).fetchone()
+        if existing:
+            continue
+        conn.execute(
+            "INSERT INTO scores (id, name, tournament, tableNumber, gameNumber, startingPosition, valuesJson, pointsJson, total, timestamp, cardLog) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (s["id"], s.get("name", ""), s.get("tournament"),
+             s.get("tableNumber"), s.get("gameNumber"), s.get("startingPosition"),
+             json.dumps(s.get("values", {})), json.dumps(s.get("points", {})),
+             s.get("total", 0), s.get("timestamp", ""),
+             json.dumps(s["cardLog"]) if s.get("cardLog") else None),
+        )
+        scores_added += 1
+
+    conn.commit()
+    conn.close()
+    return {"ok": True, "draftsAdded": drafts_added, "scoresAdded": scores_added}
+
+
 # ── Card OCR via Claude Vision ────────────────────────────────────────────────
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
