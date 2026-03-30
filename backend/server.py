@@ -140,6 +140,8 @@ def _build_cards_json() -> list[dict]:
             "adp": round(r.get("ADP") or 0, 2),
             "banned": bool(r.get("banned")),
             "isNo": bool(r.get("is_no")),
+            "pwrRaw": round(r.get("PWR_raw") or 0, 2) if r.get("PWR_raw") is not None else None,
+            "adpRaw": round(r.get("ADP_raw") or 0, 2) if r.get("ADP_raw") is not None else None,
             "pwrCorrected": round(r.get("PWRcorr") or 0, 2),
             "deck2": r.get("Deck2"),
             "hasBonusSymbol": bool(r.get("has_bonus_symbol")),

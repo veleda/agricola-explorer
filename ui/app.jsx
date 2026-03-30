@@ -65,6 +65,46 @@ function pwrColor(card) {
 }
 const TYPE_ICONS = { Occupation: "\uD83D\uDC64", MinorImprovement: "\uD83D\uDD27", MajorImprovement: "\u2B50" };
 
+// Corrected-value indicator: shows purple text + star when PWR/ADP differs from raw
+function isCorrected(card, field) {
+  const raw = card[field + "Raw"];
+  const val = card[field];
+  return raw != null && val != null && Math.abs(val - raw) > 0.001;
+}
+const CORR_COLOR = "#7c3aed";
+function CorrStat({ card, field, decimals = 1, baseColor }) {
+  const val = card[field];
+  if (!val || val <= 0) return "\u2013";
+  const corrected = isCorrected(card, field);
+  const color = corrected ? CORR_COLOR : baseColor;
+  const raw = card[field + "Raw"];
+  const [hover, setHover] = useState(false);
+  if (!corrected) {
+    return (
+      <span style={{ color, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
+        {val.toFixed(decimals)}
+      </span>
+    );
+  }
+  return (
+    <span style={{ position: "relative", display: "inline-block", color, fontWeight: 600, fontVariantNumeric: "tabular-nums", cursor: "help" }}
+      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+      onClick={() => setHover(h => !h)}>
+      {val.toFixed(decimals)}<span style={{ fontSize: "0.7em", verticalAlign: "super" }}>*</span>
+      {hover && (
+        <span style={{
+          position: "absolute", bottom: "calc(100% + 6px)", left: "50%", transform: "translateX(-50%)",
+          background: "#1c1917", color: "#fafaf9", fontSize: 11, fontWeight: 400,
+          padding: "4px 8px", borderRadius: 6, whiteSpace: "nowrap", zIndex: 1000,
+          pointerEvents: "none", boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
+        }}>
+          {field.toUpperCase()} corrected (raw: {raw.toFixed(decimals)})
+        </span>
+      )}
+    </span>
+  );
+}
+
 const PRESET_QUERIES = [
   { label: "Food Engines", description: "Cards that gain food on recurring triggers", filters: { gains: ["food"], affects: ["each_round", "harvest", "whenever"] } },
   { label: "Hidden Gems", description: "High win rate, rarely played", filters: { minWin: 0.30, maxPlay: 0.20 } },
@@ -599,9 +639,7 @@ function GalleryView({ cards, onSelectCard, selectedId, themeE }) {
                 }}>
                   <div style={{ flex: 1 }}>
                     <div style={{ color: themeE.textDim, fontSize: 9, marginBottom: 2 }}>PWR</div>
-                    <div style={{ color: c.pwr > 2 ? themeE.purple : themeE.textSecondary, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
-                      {c.pwr > 0 ? c.pwr.toFixed(1) : "–"}
-                    </div>
+                    <div><CorrStat card={c} field="pwr" decimals={1} baseColor={c.pwr > 2 ? themeE.purple : themeE.textSecondary} /></div>
                   </div>
                   <div style={{ flex: 1 }}>
                     <div style={{ color: themeE.textDim, fontSize: 9, marginBottom: 2 }}>Win %</div>
@@ -684,7 +722,13 @@ function CardDetail({ card, onClose, onFilterGain, onFilterAffect, onFilterPrere
       {card.pwr != null && card.pwr > 0 && (
         <div style={{ fontSize: 12, marginBottom: 8 }}>
           <span style={{ color: themeE.textDim }}>PWR: </span>
-          <span style={{ color: themeE.purple, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{card.pwr.toFixed(2)}</span>
+          <CorrStat card={card} field="pwr" decimals={2} baseColor={themeE.purple} />
+        </div>
+      )}
+      {card.adp != null && card.adp > 0 && (
+        <div style={{ fontSize: 12, marginBottom: 8 }}>
+          <span style={{ color: themeE.textDim }}>ADP: </span>
+          <CorrStat card={card} field="adp" decimals={2} baseColor={themeE.accent} />
         </div>
       )}
 
@@ -1541,11 +1585,11 @@ export default function App() {
                         <td style={{ padding: "5px 4px", fontVariantNumeric: "tabular-nums", color: E.textMuted }}>
                           {(c.playRatio * 100).toFixed(0)}%
                         </td>
-                        <td style={{ padding: "5px 4px", fontVariantNumeric: "tabular-nums", color: c.pwr > 2 ? E.purple : E.textMuted }}>
-                          {c.pwr > 0 ? c.pwr.toFixed(1) : "\u2013"}
+                        <td style={{ padding: "5px 4px" }}>
+                          <CorrStat card={c} field="pwr" decimals={1} baseColor={c.pwr > 2 ? E.purple : E.textMuted} />
                         </td>
-                        <td style={{ padding: "5px 4px", fontVariantNumeric: "tabular-nums", color: c.adp > 0 ? E.accent : E.textMuted }}>
-                          {c.adp > 0 ? c.adp.toFixed(1) : "\u2013"}
+                        <td style={{ padding: "5px 4px" }}>
+                          <CorrStat card={c} field="adp" decimals={1} baseColor={c.adp > 0 ? E.accent : E.textMuted} />
                         </td>
                       </tr>
                     );})}
@@ -1921,11 +1965,11 @@ export default function App() {
                         <td style={{ padding: "6px", fontVariantNumeric: "tabular-nums", color: E.textMuted }}>
                           {(c.playRatio * 100).toFixed(1)}%
                         </td>
-                        <td style={{ padding: "6px", fontVariantNumeric: "tabular-nums", color: c.pwr > 2 ? E.purple : E.textMuted }}>
-                          {c.pwr > 0 ? c.pwr.toFixed(2) : "\u2013"}
+                        <td style={{ padding: "6px" }}>
+                          <CorrStat card={c} field="pwr" decimals={2} baseColor={c.pwr > 2 ? E.purple : E.textMuted} />
                         </td>
-                        <td style={{ padding: "6px", fontVariantNumeric: "tabular-nums", color: c.adp > 0 ? E.accent : E.textMuted }}>
-                          {c.adp > 0 ? c.adp.toFixed(2) : "\u2013"}
+                        <td style={{ padding: "6px" }}>
+                          <CorrStat card={c} field="adp" decimals={2} baseColor={c.adp > 0 ? E.accent : E.textMuted} />
                         </td>
                         <td style={{ padding: "6px" }}>
                           <div style={{ display: "flex", flexWrap: "wrap", gap: 2 }}>

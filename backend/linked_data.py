@@ -65,6 +65,15 @@ footer { margin-top: 48px; padding: 20px 0; border-top: 1px solid var(--border);
 .ns-table { font-family: monospace; font-size: 0.85rem; }
 .ns-table td { padding: 4px 16px 4px 0; }
 .back-link { font-size: 0.9rem; margin-bottom: 16px; display: block; }
+.corrected { color: #7c3aed; cursor: help; position: relative; display: inline-block; }
+.corrected-star { font-size: 0.7em; vertical-align: super; }
+.corrected .corr-tip {
+  display: none; position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+  background: #1c1917; color: #fafaf9; font-size: 11px; font-weight: 400;
+  padding: 4px 8px; border-radius: 6px; white-space: nowrap; z-index: 1000;
+  pointer-events: none; box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+}
+.corrected:hover .corr-tip { display: block; }
 @media (max-width: 600px) {
   .card-hero { flex-direction: column; }
   .card-img { width: 100%; max-width: 300px; }
@@ -328,17 +337,17 @@ def build_card_page(card: dict, all_cards_by_id: dict) -> str:
     parts.append('</div></div>')  # card-details + card-hero
 
     # Tournament stats
-    stats = [
-        ("PWR", card.get("pwr", 0)),
-        ("ADP", card.get("adp", 0)),
-        ("Play Ratio", f"{card.get('playRatio', 0):.1%}" if card.get("playRatio") else "—"),
-        ("Win Ratio", f"{card.get('winRatio', 0):.1%}" if card.get("winRatio") else "—"),
-    ]
+    pwr_html = _fmt_stat(card.get("pwr"), card.get("pwrRaw"), "PWR", ".2f")
+    adp_html = _fmt_stat(card.get("adp"), card.get("adpRaw"), "ADP", ".1f")
+    play_ratio = f"{card.get('playRatio', 0):.1%}" if card.get("playRatio") else "—"
+    win_ratio = f"{card.get('winRatio', 0):.1%}" if card.get("winRatio") else "—"
+
     parts.append('<section style="margin-top:24px"><h2>Tournament Statistics</h2>')
     parts.append('<div class="stat-grid">')
-    for label, val in stats:
-        display = val if isinstance(val, str) else f"{val:.2f}" if val else "—"
-        parts.append(f'<div class="stat-box"><div class="val">{_e(str(display))}</div><div class="lbl">{_e(label)}</div></div>')
+    parts.append(f'<div class="stat-box"><div class="val">{pwr_html}</div><div class="lbl">PWR</div></div>')
+    parts.append(f'<div class="stat-box"><div class="val">{adp_html}</div><div class="lbl">ADP</div></div>')
+    parts.append(f'<div class="stat-box"><div class="val">{_e(play_ratio)}</div><div class="lbl">Play Ratio</div></div>')
+    parts.append(f'<div class="stat-box"><div class="val">{_e(win_ratio)}</div><div class="lbl">Win Ratio</div></div>')
     parts.append('</div></section>')
 
     # Gains & Affects
@@ -448,10 +457,10 @@ def build_deck_page(deck: dict, cards_in_deck: list[dict]) -> str:
             parts.append('<table class="props">')
             parts.append('<tr><th>Name</th><th>PWR</th><th>ADP</th><th>Cost</th></tr>')
             for c in clist:
-                pwr = f"{c['pwr']:.2f}" if c.get("pwr") else "—"
-                adp = f"{c['adp']:.1f}" if c.get("adp") else "—"
+                pwr_html = _fmt_stat(c.get("pwr"), c.get("pwrRaw"), "PWR", ".2f")
+                adp_html = _fmt_stat(c.get("adp"), c.get("adpRaw"), "ADP", ".1f")
                 cost = c.get("costLabel", "") or "—"
-                parts.append(f'<tr><td><a href="/{_e(c["id"])}">{_e(c["name"])}</a></td><td>{pwr}</td><td>{adp}</td><td>{_e(cost)}</td></tr>')
+                parts.append(f'<tr><td><a href="/{_e(c["id"])}">{_e(c["name"])}</a></td><td>{pwr_html}</td><td>{adp_html}</td><td>{_e(cost)}</td></tr>')
             parts.append('</table>')
         parts.append('</section>')
 
@@ -559,21 +568,37 @@ def build_category_page(
     return _page(f"{title} — Agricola Ontology", "\n".join(parts), canonical=NS + slug)
 
 
+def _fmt_stat(value, raw_value, label: str, fmt: str = ".2f") -> str:
+    """Format a stat value, highlighting it if it differs from raw (corrected)."""
+    if not value:
+        return "—"
+    formatted = f"{value:{fmt}}"
+    if raw_value is not None and abs(value - raw_value) > 0.001:
+        raw_formatted = f"{raw_value:{fmt}}"
+        return (
+            f'<span class="corrected">{formatted}'
+            f'<span class="corrected-star">*</span>'
+            f'<span class="corr-tip">{label} corrected (raw: {raw_formatted})</span>'
+            f'</span>'
+        )
+    return formatted
+
+
 def _append_card_table(parts: list, cards: list) -> None:
     """Append an HTML table of cards with clickable IRIs."""
     parts.append('<table class="props">')
     parts.append('<tr><th>Name</th><th>Deck</th><th>PWR</th><th>ADP</th><th>IRI</th></tr>')
     for c in cards:
-        pwr = f"{c['pwr']:.2f}" if c.get("pwr") else "—"
-        adp = f"{c['adp']:.1f}" if c.get("adp") else "—"
+        pwr_html = _fmt_stat(c.get("pwr"), c.get("pwrRaw"), "PWR", ".2f")
+        adp_html = _fmt_stat(c.get("adp"), c.get("adpRaw"), "ADP", ".1f")
         deck = c.get("deck", "") or "—"
         iri_path = c["id"]
         parts.append(
             f'<tr>'
             f'<td><a href="/{_e(iri_path)}">{_e(c["name"])}</a></td>'
             f'<td>{_e(deck)}</td>'
-            f'<td>{pwr}</td>'
-            f'<td>{adp}</td>'
+            f'<td>{pwr_html}</td>'
+            f'<td>{adp_html}</td>'
             f'<td class="iri" style="font-size:0.72rem"><a href="/{_e(iri_path)}">{_e(NS + iri_path)}</a></td>'
             f'</tr>'
         )
