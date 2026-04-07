@@ -533,7 +533,7 @@ function GalleryView({ cards, onSelectCard, selectedId, themeE }) {
     <div style={{ padding: "16px", overflow: "auto", height: "100%" }}>
       <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 12 }}>
         {cards.map(c => {
-          const imgSrc = c.imageUrl ? `${API_BASE}/api/imgproxy?url=${encodeURIComponent(c.imageUrl)}` : null;
+          const imgSrc = c.imageUrl ? (c.imageUrl.startsWith("/img/") ? c.imageUrl : `${API_BASE}/api/imgproxy?url=${encodeURIComponent(c.imageUrl)}`) : null;
           const isSelected = c.id === selectedId;
           return (
             <div
@@ -665,7 +665,7 @@ function CardDetail({ card, onClose, onFilterGain, onFilterAffect, onFilterPrere
   );
 
   const barW = Math.round(card.winRatio * 200);
-  const imgSrc = card.imageUrl ? `${API_BASE}/api/imgproxy?url=${encodeURIComponent(card.imageUrl)}` : null;
+  const imgSrc = card.imageUrl ? (card.imageUrl.startsWith("/img/") ? card.imageUrl : `${API_BASE}/api/imgproxy?url=${encodeURIComponent(card.imageUrl)}`) : null;
 
   return (
     <div style={{ padding: 16 }}>
@@ -934,8 +934,12 @@ export default function App() {
   const isMobile = useIsMobile();
 
   // App mode: "home" (mobile only) | "explorer" | "drafter" | "hands" | "score"
-  const [appMode, setAppMode] = useState(isMobile ? "home" : "explorer");
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // Route /challenge/{id} directly to drafter
+  const initialMode = window.location.pathname.startsWith("/challenge/")
+    ? "drafter"
+    : (isMobile ? "home" : "explorer");
+  const [appMode, setAppMode] = useState(initialMode);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(initialMode === "drafter");
   const [handsDraftType, setHandsDraftType] = useState(null); // for linking from drafter
   const [explorerTheme, setExplorerTheme] = useState("light");
   const [backupOpen, setBackupOpen] = useState(false);

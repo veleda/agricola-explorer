@@ -372,6 +372,17 @@ def _load_alt_images(agricola_json: str = "data/agricola.json") -> dict[str, str
         return {}
 
 
+# Local card images (name_key → URL path served by backend)
+_LOCAL_CARD_IMAGES = {
+    "resourcedealer": "/img/resource_dealer.jpg",
+    "resourcecollector": "/img/resource_collector.jpg",
+    "grainlover": "/img/grain_lover.jpg",
+    "nilefarmer": "/img/nile_farmer.jpg",
+    "firewoodcollector": "/img/firewood_collector.jpg",
+    "porcelainmaker": "/img/porcelain_maker.jpg",
+}
+
+
 def load_cards(json_path: str = "data/cards.json",
                stats_csv: str = "data/agricola_cards_all.csv") -> pl.DataFrame:
     """Load cards from cards.json (single source of truth), enrich with
@@ -420,14 +431,14 @@ def load_cards(json_path: str = "data/cards.json",
         # Cost string: new JSON uses "1W,1C" with commas → replace with spaces
         cost_raw = (c.get("cost") or "").replace(",", " ")
 
-        # Image: prefer alt_image from agricola.json, fall back to cards.json
+        # Image: local overrides → alt_image from agricola.json → cards.json
         name_key = name.strip().lower().replace(" ", "").replace("'", "").replace("-", "")
+        local_url = _LOCAL_CARD_IMAGES.get(name_key)
         alt_url = alt_images.get(name_key)
         if not alt_url:
-            # Also try the raw lowercase name with spaces removed
             alt_url = alt_images.get(name.strip().lower())
         imgs = c.get("card_image_urls") or []
-        image_url = alt_url or (imgs[0] if imgs else None)
+        image_url = local_url or alt_url or (imgs[0] if imgs else None)
 
         # v2 xlsx values override CSV stats when present
         dealt = xlsx.get("dealt") if xlsx.get("dealt") is not None else st.get("dealt")

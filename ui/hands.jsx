@@ -25,10 +25,8 @@ const T = {
 const DRAFT_TYPE_TABS = [
   { key: "Occupation", label: "Occupations" },
   { key: "MinorImprovement", label: "Minor Improvements" },
-  { key: "MiniOccupation", label: "Mini Occupations" },
-  { key: "MiniMinorImprovement", label: "Mini Minor Imps" },
   { key: "FullCombo", label: "Full Draft" },
-  { key: "MiniCombo", label: "Mini Full Draft" },
+  { key: "challenges", label: "\u2694\uFE0F Challenges" },
 ];
 
 // Combo draft types have both occupations and minor improvements
@@ -59,6 +57,7 @@ async function fetchPopular(draftType) {
 
 function cardImgSrc(card) {
   if (!card || !card.imageUrl) return null;
+  if (card.imageUrl.startsWith("/img/")) return card.imageUrl;
   return `${API_BASE}/api/imgproxy?url=${encodeURIComponent(card.imageUrl)}`;
 }
 
@@ -440,6 +439,216 @@ function HandRow({ hand, cardMap, isExpanded, onToggle, onShowTwins }) {
 }
 
 
+// ── Challenges Tab ──────────────────────────────────────────────────────────
+
+async function fetchChallenges(page) {
+  const res = await fetch(`${API_BASE}/api/challenges?page=${page}&pageSize=20`);
+  return res.json();
+}
+
+function ChallengesTab({ cardMap }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const [expandedId, setExpandedId] = useState(null);
+
+  useEffect(() => {
+    setLoading(true);
+    fetchChallenges(page)
+      .then(d => { setData(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [page]);
+
+  if (loading) return <div style={{ padding: 40, textAlign: "center", color: T.textMuted }}>Loading challenges...</div>;
+  if (!data || data.challenges.length === 0) {
+    return (
+      <div style={{
+        padding: 40, textAlign: "center", borderRadius: 10,
+        background: T.surface, border: `1px solid ${T.border}`,
+      }}>
+        <div style={{ fontSize: 32, marginBottom: 8 }}>{"\u2694\uFE0F"}</div>
+        <div style={{ fontSize: 14, color: T.textSecondary }}>
+          No challenges yet. Complete a draft and click "Challenge a Friend" to create one!
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div style={{ fontSize: 11, color: T.textMuted, marginBottom: 10 }}>
+        {data.total} challenge{data.total !== 1 ? "s" : ""} — page {data.page} of {data.totalPages}
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {data.challenges.map(ch => {
+          const isExpanded = expandedId === ch.id;
+          const creatorCards = (ch.creatorPicks || []).map(id => cardMap[id]).filter(Boolean);
+          const challengerCards = ch.completed ? (ch.challengerPicks || []).map(id => cardMap[id]).filter(Boolean) : [];
+          const overlap = ch.completed
+            ? (ch.creatorPicks || []).filter(id => (ch.challengerPicks || []).includes(id))
+            : [];
+          const overlapSet = new Set(overlap);
+          const challengeUrl = `${window.location.origin}/challenge/${ch.id}`;
+
+          return (
+            <div key={ch.id} style={{
+              borderRadius: 10, border: `1px solid ${T.border}`, background: T.surface,
+              overflow: "hidden",
+            }}>
+              {/* Summary row */}
+              <div onClick={() => setExpandedId(isExpanded ? null : ch.id)}
+                style={{
+                  padding: "12px 16px", cursor: "pointer", display: "flex",
+                  alignItems: "center", gap: 12, flexWrap: "wrap",
+                }}>
+                <div style={{ fontSize: 18 }}>{"\u2694\uFE0F"}</div>
+                <div style={{ flex: 1, minWidth: 120 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: T.text }}>
+                    {ch.creatorName}
+                    {ch.completed
+                      ? <span style={{ color: T.textSecondary, fontWeight: 400 }}> vs {ch.challengerName}</span>
+                      : <span style={{ color: T.textMuted, fontWeight: 400, fontStyle: "italic" }}> — waiting for challenger</span>}
+                  </div>
+                  <div style={{ fontSize: 11, color: T.textMuted, marginTop: 2 }}>
+                    {ch.draftType === "FullCombo" ? "Full Draft" : ch.draftType === "Occupation" ? "Occupations" : "Minor Improvements"}
+                    {" · "}{new Date(ch.createdAt).toLocaleDateString()}
+                  </div>
+                </div>
+                {ch.completed && (
+                  <div style={{
+                    padding: "4px 10px", borderRadius: 99, background: T.greenLight,
+                    color: T.green, fontSize: 11, fontWeight: 600,
+                  }}>
+                    {overlap.length} card{overlap.length !== 1 ? "s" : ""} in common
+                  </div>
+                )}
+                {!ch.completed && (
+                  <div style={{
+                    padding: "4px 10px", borderRadius: 99, background: "#f5f3ff",
+                    color: T.purple, fontSize: 11, fontWeight: 600,
+                  }}>
+                    Open
+                  </div>
+                )}
+                <div style={{ fontSize: 16, color: T.textMuted, transition: "transform 0.15s", transform: isExpanded ? "rotate(180deg)" : "rotate(0)" }}>{"\u25BC"}</div>
+              </div>
+
+              {/* Expanded details */}
+              {isExpanded && (
+                <div style={{ padding: "0 16px 16px", borderTop: `1px solid ${T.borderLight}` }}>
+                  {/* Creator hand */}
+                  <div style={{ marginTop: 12, marginBottom: ch.completed ? 16 : 8 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: T.accent, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
+                      {ch.creatorName}'s hand
+                    </div>
+                    <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                      {creatorCards.map(c => (
+                        <div key={c.id} style={{
+                          padding: "3px 8px", borderRadius: 6, fontSize: 11,
+                          background: ch.completed && overlapSet.has(c.id) ? T.greenLight : T.surfaceAlt,
+                          border: `1px solid ${ch.completed && overlapSet.has(c.id) ? T.green + "44" : T.border}`,
+                          color: T.text, fontWeight: 500,
+                        }}>
+                          {c.name}
+                        </div>
+                      ))}
+                    </div>
+                    {ch.creatorComment && (
+                      <div style={{ fontSize: 11, color: T.textSecondary, fontStyle: "italic", marginTop: 4 }}>
+                        "{ch.creatorComment}"
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Challenger hand (if completed) */}
+                  {ch.completed && (
+                    <div style={{ marginBottom: 12 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: T.purple, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
+                        {ch.challengerName}'s hand
+                      </div>
+                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                        {challengerCards.map(c => (
+                          <div key={c.id} style={{
+                            padding: "3px 8px", borderRadius: 6, fontSize: 11,
+                            background: overlapSet.has(c.id) ? T.greenLight : T.surfaceAlt,
+                            border: `1px solid ${overlapSet.has(c.id) ? T.green + "44" : T.border}`,
+                            color: T.text, fontWeight: 500,
+                          }}>
+                            {c.name}
+                          </div>
+                        ))}
+                      </div>
+                      {ch.challengerComment && (
+                        <div style={{ fontSize: 11, color: T.textSecondary, fontStyle: "italic", marginTop: 4 }}>
+                          "{ch.challengerComment}"
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Challenge link for open challenges */}
+                  {!ch.completed && (
+                    <div style={{
+                      padding: "8px 12px", borderRadius: 8, background: "#f5f3ff",
+                      border: `1px solid ${T.purple}44`, fontSize: 12, color: T.textSecondary,
+                      display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap",
+                    }}>
+                      <span style={{ flex: 1, minWidth: 150, fontSize: 11, color: T.text, wordBreak: "break-all" }}>{challengeUrl}</span>
+                      <CopyButton text={challengeUrl} />
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Pagination */}
+      {data.totalPages > 1 && (
+        <div style={{ display: "flex", justifyContent: "center", gap: 8, marginTop: 20 }}>
+          <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1}
+            style={{
+              padding: "8px 16px", borderRadius: 8, border: `1px solid ${T.border}`,
+              background: page <= 1 ? T.surfaceAlt : T.surface,
+              color: page <= 1 ? T.textMuted : T.text, fontSize: 12,
+              cursor: page <= 1 ? "default" : "pointer",
+            }}>{"\u2190"} Previous</button>
+          <button onClick={() => setPage(p => Math.min(data.totalPages, p + 1))} disabled={page >= data.totalPages}
+            style={{
+              padding: "8px 16px", borderRadius: 8, border: `1px solid ${T.border}`,
+              background: page >= data.totalPages ? T.surfaceAlt : T.surface,
+              color: page >= data.totalPages ? T.textMuted : T.text, fontSize: 12,
+              cursor: page >= data.totalPages ? "default" : "pointer",
+            }}>Next {"\u2192"}</button>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ── Copy button with "Copied!" feedback ─────────────────────────────────────
+function CopyButton({ text }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <button onClick={handleCopy}
+      style={{
+        padding: "5px 12px", borderRadius: 6, border: "none",
+        background: copied ? T.green : T.purple, color: "#fff",
+        fontSize: 11, fontWeight: 600, cursor: "pointer",
+        transition: "background 0.2s",
+      }}>
+      {copied ? "\u2713 Copied!" : "Copy"}
+    </button>
+  );
+}
+
 // ── Main Component ───────────────────────────────────────────────────────────
 export default function CommunityHands({ allCards, initialDraftType }) {
   const [activeTab, setActiveTab] = useState(initialDraftType || "Occupation");
@@ -466,8 +675,9 @@ export default function CommunityHands({ allCards, initialDraftType }) {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  // Fetch hands
+  // Fetch hands (skip for challenges tab)
   useEffect(() => {
+    if (activeTab === "challenges") return;
     setLoading(true);
     searchHands(debouncedQuery, activeTab, page)
       .then(data => { setResults(data); setLoading(false); })
@@ -525,11 +735,14 @@ export default function CommunityHands({ allCards, initialDraftType }) {
           })}
         </div>
 
-        {/* Popular cards */}
-        <PopularCardsBar draftType={activeTab} cardMap={cardMap} />
+        {/* Challenges tab */}
+        {activeTab === "challenges" && <ChallengesTab cardMap={cardMap} />}
+
+        {/* Popular cards (hands tabs only) */}
+        {activeTab !== "challenges" && <PopularCardsBar draftType={activeTab} cardMap={cardMap} />}
 
         {/* Search bar */}
-        <div style={{
+        {activeTab !== "challenges" && <div style={{
           display: "flex", gap: 8, marginBottom: 16, alignItems: "center",
         }}>
           <div style={{ position: "relative", flex: 1 }}>
@@ -559,8 +772,9 @@ export default function CommunityHands({ allCards, initialDraftType }) {
                 cursor: "pointer",
               }}>Clear</button>
           )}
-        </div>
+        </div>}
 
+        {activeTab !== "challenges" && <>
         {/* Results count */}
         {results && (
           <div style={{ fontSize: 11, color: T.textMuted, marginBottom: 10 }}>
@@ -655,6 +869,7 @@ export default function CommunityHands({ allCards, initialDraftType }) {
               }}>Next {"\u2192"}</button>
           </div>
         )}
+        </>}
       </div>
 
       {/* Twins modal */}

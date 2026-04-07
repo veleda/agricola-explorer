@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import miniDecks from "./mini-decks.json";
 
 const API_BASE = "";
@@ -6,13 +6,31 @@ const NUM_PLAYERS = 4;
 
 // Draft mode configs
 const MODES = {
-  full:      { maxPicks: 7, packSize: 9, label: "All Cards Draft",      desc: "Draft 7 cards from packs of 9" },
+  full:      { maxPicks: 7, packSize: 9, label: "Short Draft",      desc: "Draft 7 occupations or minor improvements" },
   mini:      { maxPicks: 5, packSize: 9, label: "Mini Draft",           desc: "Pick 5 from a fixed deck of 9" },
-  fullCombo: { maxPicks: 7, packSize: 9, label: "All Cards Full Draft", desc: "Draft 7+7 cards: occupations then minor improvements" },
+  fullCombo: { maxPicks: 7, packSize: 9, label: "Full Draft", desc: "Draft 7+7 cards: occupations then minor improvements" },
   miniCombo: { maxPicks: 5, packSize: 9, label: "Mini Full Draft",      desc: "Pick 5+5 cards: occupations then minor improvements" },
 };
 const COMBO_MODES = new Set(["fullCombo", "miniCombo"]);
 const MINI_NUM_DECKS = 100;
+
+// ── Seeded PRNG (Mulberry32) for reproducible challenge drafts ──────────────
+function mulberry32(seed) {
+  return function() {
+    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+    let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function seededShuffle(arr, rng) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
 
 // ── Light theme palette ─────────────────────────────────────────────────────
 const T = {
@@ -46,33 +64,34 @@ function shuffle(arr) {
 
 // NPC strategy: pick one of the two best ADP cards, but every 5th pick is random
 let _npcPickCounter = 0;
-function npcPick(cards) {
+function npcPick(cards, rng) {
   if (cards.length === 0) return null;
+  const rand = rng || Math.random;
   _npcPickCounter++;
   // Every 5th pick: choose completely at random (makes NPCs less perfect)
   if (_npcPickCounter % 5 === 0) {
-    return cards[Math.floor(Math.random() * cards.length)];
+    return cards[Math.floor(rand() * cards.length)];
   }
   const withAdp = cards.filter(c => c.adp > 0);
   if (withAdp.length > 0) {
     // Sort ascending: lower ADP = picked earlier in tournaments = stronger
     withAdp.sort((a, b) => a.adp - b.adp);
     const top = withAdp.slice(0, Math.min(2, withAdp.length));
-    return top[Math.floor(Math.random() * top.length)];
+    return top[Math.floor(rand() * top.length)];
   }
   // Fallback: pick from top 2 by win ratio if no ADP data
   const sorted = [...cards].sort((a, b) => (b.winRatio || 0) - (a.winRatio || 0));
   const top = sorted.slice(0, Math.min(2, sorted.length));
-  return top[Math.floor(Math.random() * top.length)];
+  return top[Math.floor(rand() * top.length)];
 }
 function npcPickReset() { _npcPickCounter = 0; }
 
 // ── API helpers ─────────────────────────────────────────────────────────────
-async function saveDraft(username, draftType, picks, pickOrder, comment, combos) {
+async function saveDraft(username, draftType, picks, pickOrder, comment, combos, challengeId) {
   const res = await fetch(`${API_BASE}/api/drafts`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, draftType, picks, pickOrder, comment: comment || "", combos: combos || [] }),
+    body: JSON.stringify({ username, draftType, picks, pickOrder, comment: comment || "", combos: combos || [], challengeId: challengeId || null }),
   });
   const data = await res.json();
   // 409 = already saved this exact hand — treat as success but flag it
@@ -96,8 +115,29 @@ async function fetchDraftStats(draftType) {
   return res.json();
 }
 
+// ── Challenge API helpers ───────────────────────────────────────────────────
+async function createChallenge(data) {
+  const res = await fetch(`${API_BASE}/api/challenges`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data),
+  });
+  return res.json();
+}
+async function fetchChallenge(id) {
+  const res = await fetch(`${API_BASE}/api/challenges/${id}`);
+  if (!res.ok) throw new Error("Challenge not found");
+  return res.json();
+}
+async function submitChallenge(id, data) {
+  const res = await fetch(`${API_BASE}/api/challenges/${id}/complete`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
 function cardImgSrc(card) {
   if (!card || !card.imageUrl) return null;
+  // Local images (served from /img/) don't need the proxy
+  if (card.imageUrl.startsWith("/img/")) return card.imageUrl;
   return `${API_BASE}/api/imgproxy?url=${encodeURIComponent(card.imageUrl)}`;
 }
 
@@ -205,12 +245,15 @@ function DraftCard({ card, onPick, disabled, hideStats, pickPopularity }) {
 }
 
 // ── Draft results screen ────────────────────────────────────────────────────
-function DraftResults({ picks, allCards, draftType, saveDraftType, username, onSave, onNewDraft, saved, saving, isMini, saveResult, onViewHands, occPicks, minorPicks, isCombo }) {
+function DraftResults({ picks, allCards, draftType, saveDraftType, username, onSave, onNewDraft, saved, saving, isMini, saveResult, onViewHands, occPicks, minorPicks, isCombo, onCreateChallenge, challengeUrl, challengeCreating, challengeError }) {
   // For combo drafts, show the full combined hand; for single, just picks
   const allPickIds = isCombo ? [...(occPicks || []), ...(minorPicks || [])] : picks;
   const pickCards = allPickIds.map(id => allCards.find(c => c.id === id)).filter(Boolean);
   const occPickCards = isCombo ? (occPicks || []).map(id => allCards.find(c => c.id === id)).filter(Boolean) : [];
   const minorPickCards = isCombo ? (minorPicks || []).map(id => allCards.find(c => c.id === id)).filter(Boolean) : [];
+
+  // Copy feedback state
+  const [copied, setCopied] = useState(false);
 
   // Combo tagging state
   const [combos, setCombos] = useState([]);        // saved combos: [{cardIds: [...], comment: ""}]
@@ -241,7 +284,7 @@ function DraftResults({ picks, allCards, draftType, saveDraftType, username, onS
   const avgAdp = adpCards.length > 0 ? adpCards.reduce((s, c) => s + c.adp, 0) / adpCards.length : 0;
   const totalCostItems = pickCards.reduce((s, c) => s + (c.costLabel ? c.costLabel.split(/\s+/).length : 0), 0);
   const baseName = draftType === "Occupation" ? "Occupations" : "Minor Improvements";
-  const typeName = isCombo ? (isMini ? "Mini Full Draft" : "All Cards Full Draft") : (isMini ? `Mini ${baseName}` : baseName);
+  const typeName = isCombo ? (isMini ? "Mini Full Draft" : "Full Draft") : (isMini ? `Mini ${baseName}` : baseName);
 
   return (
     <div style={{ padding: 24, maxWidth: 900, margin: "0 auto" }}>
@@ -491,17 +534,32 @@ function DraftResults({ picks, allCards, draftType, saveDraftType, username, onS
 
         <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
           {!saved ? (
-            <button onClick={() => onSave(combos)} disabled={saving}
-              style={{
-                padding: "10px 24px", borderRadius: 8, border: "none",
-                background: saving ? T.textMuted : T.accent, color: "#fff",
-                fontSize: 14, fontWeight: 700,
-                cursor: saving ? "not-allowed" : "pointer",
-                opacity: saving ? 0.7 : 1,
-                transition: "all 0.15s",
-              }}>
-              {saving ? "Saving..." : "Save to Community"}
-            </button>
+            <>
+              <button onClick={() => onSave(combos)} disabled={saving || challengeCreating}
+                style={{
+                  padding: "10px 24px", borderRadius: 8, border: "none",
+                  background: saving ? T.textMuted : T.accent, color: "#fff",
+                  fontSize: 14, fontWeight: 700,
+                  cursor: saving ? "not-allowed" : "pointer",
+                  opacity: saving ? 0.7 : 1,
+                  transition: "all 0.15s",
+                }}>
+                {saving ? "Saving..." : "Save to Community"}
+              </button>
+              {onCreateChallenge && !challengeUrl && (
+                <button onClick={() => onCreateChallenge(combos)} disabled={challengeCreating || saving}
+                  style={{
+                    padding: "10px 24px", borderRadius: 8, border: "none",
+                    background: challengeCreating ? T.textMuted : T.purple, color: "#fff",
+                    fontSize: 14, fontWeight: 700,
+                    cursor: challengeCreating ? "not-allowed" : "pointer",
+                    opacity: challengeCreating ? 0.7 : 1,
+                    transition: "all 0.15s",
+                  }}>
+                  {challengeCreating ? "Creating..." : "\u2694\uFE0F Challenge a Friend"}
+                </button>
+              )}
+            </>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
               <div style={{ padding: "10px 24px", borderRadius: 8, background: T.greenLight, color: T.green, fontSize: 14, fontWeight: 600 }}>
@@ -542,7 +600,188 @@ function DraftResults({ picks, allCards, draftType, saveDraftType, username, onS
               {"\uD83C\uDCCF"} Browse Community Hands
             </button>
           )}
+          {/* Challenge button also after saved (if not yet created) */}
+          {saved && onCreateChallenge && !challengeUrl && (
+            <button onClick={() => onCreateChallenge(combos)} disabled={challengeCreating}
+              style={{
+                padding: "10px 24px", borderRadius: 8, border: "none",
+                background: challengeCreating ? T.textMuted : T.purple, color: "#fff",
+                fontSize: 14, fontWeight: 700,
+                cursor: challengeCreating ? "not-allowed" : "pointer",
+                opacity: challengeCreating ? 0.7 : 1,
+                transition: "all 0.15s",
+              }}>
+              {challengeCreating ? "Creating..." : "\u2694\uFE0F Challenge a Friend"}
+            </button>
+          )}
         </div>
+
+        {/* Challenge link display */}
+        {challengeUrl && (
+          <div style={{ marginTop: 16, textAlign: "center" }}>
+            <div style={{
+              padding: "16px 20px", borderRadius: 10, background: "#f5f3ff",
+              border: `1px solid ${T.purple}44`, maxWidth: 500, margin: "0 auto",
+            }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: T.purple, marginBottom: 8 }}>
+                {"\u2694\uFE0F"} Challenge link created!
+              </div>
+              <div style={{ fontSize: 12, color: T.textSecondary, marginBottom: 10 }}>
+                Share this link — your friend will draft the same table and you can compare results.
+              </div>
+              <div style={{
+                display: "flex", gap: 8, alignItems: "center", justifyContent: "center",
+                flexWrap: "wrap",
+              }}>
+                <input type="text" readOnly value={challengeUrl}
+                  style={{
+                    flex: 1, minWidth: 200, padding: "8px 12px", borderRadius: 6,
+                    border: `1px solid ${T.border}`, background: T.surface,
+                    fontSize: 12, color: T.text, outline: "none",
+                  }}
+                  onClick={e => e.target.select()}
+                />
+                <button onClick={() => { navigator.clipboard.writeText(challengeUrl); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
+                  style={{
+                    padding: "8px 16px", borderRadius: 6, border: "none",
+                    background: copied ? T.green : T.purple, color: "#fff", fontSize: 12,
+                    fontWeight: 600, cursor: "pointer", transition: "background 0.2s",
+                  }}>
+                  {copied ? "\u2713 Copied!" : "Copy"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Challenge error */}
+        {challengeError && (
+          <div style={{ marginTop: 12, textAlign: "center" }}>
+            <div style={{ padding: "8px 16px", borderRadius: 8, background: "#fef2f2", border: `1px solid ${T.red}33`, color: T.red, fontSize: 12, fontWeight: 600, display: "inline-block" }}>
+              {challengeError}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Challenge Comparison (side-by-side) ─────────────────────────────────────
+function ChallengeComparison({ comparison, allCards, onNewDraft }) {
+  if (!comparison) return null;
+  const { creator, challenger, overlap, draftType } = comparison;
+
+  const resolveCards = (ids) => (ids || []).map(id => allCards.find(c => c.id === id)).filter(Boolean);
+  const creatorCards = resolveCards(creator.picks);
+  const challengerCards = resolveCards(challenger.picks);
+  const overlapSet = new Set(overlap || []);
+
+  const avgStat = (cards, field) => {
+    const valid = cards.filter(c => c[field] > 0);
+    return valid.length > 0 ? valid.reduce((s, c) => s + c[field], 0) / valid.length : 0;
+  };
+
+  const PlayerHand = ({ name, cards, comment, isCreator }) => {
+    const avgWin = cards.length > 0 ? cards.reduce((s, c) => s + (c.winRatio || 0), 0) / cards.length : 0;
+    const avgPwr = avgStat(cards, "pwr");
+    const avgAdp = avgStat(cards, "adp");
+    return (
+      <div style={{ flex: 1, minWidth: 280 }}>
+        <div style={{
+          fontSize: 14, fontWeight: 700, color: isCreator ? T.accent : T.purple,
+          marginBottom: 8, textAlign: "center",
+        }}>
+          {name}{isCreator ? " (Creator)" : " (Challenger)"}
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 12, flexWrap: "wrap" }}>
+          {[
+            ["Win", `${(avgWin * 100).toFixed(1)}%`, T.blue],
+            ["PWR", avgPwr > 0 ? avgPwr.toFixed(1) : "–", T.purple],
+            ["ADP", avgAdp > 0 ? avgAdp.toFixed(1) : "–", T.accent],
+          ].map(([label, val, color]) => (
+            <div key={label} style={{
+              padding: "6px 12px", borderRadius: 8, background: T.surface,
+              border: `1px solid ${T.border}`, textAlign: "center", minWidth: 60,
+            }}>
+              <div style={{ fontSize: 16, fontWeight: 700, color }}>{val}</div>
+              <div style={{ fontSize: 9, color: T.textMuted, textTransform: "uppercase" }}>{label}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{
+          display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))",
+          gap: 8,
+        }}>
+          {cards.map(c => {
+            const isOverlap = overlapSet.has(c.id);
+            return (
+              <div key={c.id} style={{
+                borderRadius: 8, overflow: "hidden",
+                border: isOverlap ? `2px solid ${T.green}` : `1px solid ${T.border}`,
+                background: isOverlap ? T.greenLight : T.surface,
+              }}>
+                <CardImageOrFallback card={c} hideStats={false} />
+                <div style={{ padding: "4px 6px" }}>
+                  <div style={{ fontSize: 10, fontWeight: 600, color: T.text }}>{c.name}</div>
+                  {isOverlap && (
+                    <div style={{ fontSize: 9, color: T.green, fontWeight: 600 }}>Same pick!</div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {comment && (
+          <div style={{
+            marginTop: 8, padding: "6px 10px", borderRadius: 6, background: T.surfaceAlt,
+            fontSize: 11, color: T.textSecondary, fontStyle: "italic",
+          }}>
+            "{comment}"
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ padding: 24, maxWidth: 1000, margin: "0 auto" }}>
+      <div style={{ textAlign: "center", marginBottom: 24 }}>
+        <div style={{ fontSize: 28, fontWeight: 700, color: T.purple, marginBottom: 4 }}>
+          {"\u2694\uFE0F"} Challenge Results
+        </div>
+        <div style={{ fontSize: 14, color: T.textSecondary }}>
+          {draftType} draft — {overlap.length} card{overlap.length !== 1 ? "s" : ""} in common
+        </div>
+      </div>
+
+      {/* Overlap summary */}
+      {overlap.length > 0 && (
+        <div style={{
+          textAlign: "center", marginBottom: 20, padding: "10px 16px",
+          borderRadius: 10, background: T.greenLight, border: `1px solid ${T.green}44`,
+        }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: T.green }}>
+            Matching cards: {resolveCards(overlap).map(c => c.name).join(", ")}
+          </span>
+        </div>
+      )}
+
+      {/* Side by side */}
+      <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+        <PlayerHand name={creator.name} cards={creatorCards} comment={creator.comment} isCreator={true} />
+        <PlayerHand name={challenger.name} cards={challengerCards} comment={challenger.comment} isCreator={false} />
+      </div>
+
+      <div style={{ textAlign: "center", marginTop: 24 }}>
+        <button onClick={onNewDraft}
+          style={{
+            padding: "10px 24px", borderRadius: 8,
+            border: `1px solid ${T.border}`, background: T.surface,
+            color: T.text, fontSize: 14, fontWeight: 600, cursor: "pointer",
+          }}>
+          New Draft
+        </button>
       </div>
     </div>
   );
@@ -676,6 +915,14 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
   // Community stats for popularity display in mini mode
   const [miniCommunityStats, setMiniCommunityStats] = useState(null);
 
+  // ── Challenge state ─────────────────────────────────────────────────────
+  const [draftSeed, setDraftSeed] = useState(null);
+  const rngRef = useRef(null);
+  const [challengeMode, setChallengeMode] = useState(null); // null | { id, creatorName, ... }
+  const [challengeResult, setChallengeResult] = useState(null); // comparison data after friend completes
+  const [challengeUrl, setChallengeUrl] = useState(null); // URL after creating a challenge
+  const [challengeCreating, setChallengeCreating] = useState(false);
+
   const isCombo = COMBO_MODES.has(drafterMode);
   const isMini = drafterMode === "mini" || drafterMode === "miniCombo";
   const baseDrafterMode = drafterMode === "fullCombo" ? "full" : drafterMode === "miniCombo" ? "mini" : drafterMode;
@@ -767,11 +1014,11 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
     ? (activeDraftType === "Occupation" ? "MiniOccupation" : "MiniMinorImprovement")
     : activeDraftType;
 
-  const initPacks = useCallback((cardPool, useMiniPacks) => {
+  const initPacks = useCallback((cardPool, useMiniPacks, rng) => {
     if (useMiniPacks) {
       setPacks(miniPacks.map(p => [...p]));
     } else {
-      const pool = shuffle(cardPool);
+      const pool = rng ? seededShuffle(cardPool, rng) : shuffle(cardPool);
       const newPacks = [];
       for (let p = 0; p < NUM_PLAYERS; p++) {
         newPacks.push(pool.splice(0, packSize));
@@ -780,13 +1027,16 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
     }
   }, [miniPacks, packSize]);
 
-  const startDraft = useCallback(() => {
-    if (!canStart) return;
+  const startDraft = useCallback((overrideSeed) => {
+    if (!canStart && !overrideSeed) return;
     npcPickReset();
+    const seed = overrideSeed || Math.floor(Math.random() * 2**32);
+    setDraftSeed(seed);
+    rngRef.current = mulberry32(seed);
     if (isCombo) setComboPhase(1);
     setOccPicks([]);
     setOccPickOrder([]);
-    initPacks(draftableCards, isMini);
+    initPacks(draftableCards, isMini, rngRef.current);
     setMyPicks([]);
     setPickOrder([]);
     setRound(1);
@@ -834,7 +1084,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
     const newPacks = packs.map(pack => [...pack]);
     newPacks[0] = newPacks[0].filter(c => c.id !== card.id);
     for (let npc = 1; npc < NUM_PLAYERS; npc++) {
-      const pick = npcPick(newPacks[npc]);
+      const pick = npcPick(newPacks[npc], rngRef.current);
       if (pick) newPacks[npc] = newPacks[npc].filter(c => c.id !== pick.id);
     }
     const rotated = [newPacks[1], newPacks[2], newPacks[3], newPacks[0]];
@@ -868,7 +1118,9 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
         } else {
           // For full combo: build new packs from minor improvement pool
           const decks = selectedDecks || availableDecks;
-          const minorPool = shuffle(allCards.filter(c => c.type === "MinorImprovement" && decks.includes(c.deck)));
+          const minorPool = rngRef.current
+            ? seededShuffle(allCards.filter(c => c.type === "MinorImprovement" && decks.includes(c.deck)), rngRef.current)
+            : shuffle(allCards.filter(c => c.type === "MinorImprovement" && decks.includes(c.deck)));
           const newMinorPacks = [];
           for (let p = 0; p < NUM_PLAYERS; p++) {
             newMinorPacks.push(minorPool.splice(0, packSize));
@@ -890,24 +1142,35 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
     try {
       const commentEl = document.getElementById("draft-comment");
       const comment = commentEl ? commentEl.value.trim() : "";
-      if (isCombo) {
-        // Save combined hand: all picks together
-        const allPicks = [...occPicks, ...myPicks];
-        const allPickOrder = [...occPickOrder, ...pickOrder.map(r => r + occPickOrder.length)];
-        const result = await saveDraft(username, saveDraftType, allPicks, allPickOrder, comment, combos || []);
-        setSaved(true);
-        setSaveResult(result);
-      } else {
-        const result = await saveDraft(username, saveDraftType, myPicks, pickOrder, comment, combos || []);
-        setSaved(true);
-        setSaveResult(result);
+      const allPicks = isCombo ? [...occPicks, ...myPicks] : myPicks;
+      const allPickOrder = isCombo ? [...occPickOrder, ...pickOrder.map(r => r + occPickOrder.length)] : pickOrder;
+      const result = await saveDraft(username, saveDraftType, allPicks, allPickOrder, comment, combos || []);
+      setSaved(true);
+      setSaveResult(result);
+
+      // If this is a challenge, also submit the challenge completion
+      if (challengeMode && challengeMode.id) {
+        try {
+          const challengeRes = await submitChallenge(challengeMode.id, {
+            challengerName: username,
+            picks: allPicks,
+            pickOrder: allPickOrder,
+            comment: comment,
+            combos: (combos || []).map(c => ({ cardIds: c.cardIds, comment: c.comment || "" })),
+          });
+          if (challengeRes.ok && challengeRes.comparison) {
+            setChallengeResult(challengeRes.comparison);
+          }
+        } catch (err) {
+          console.error("Failed to submit challenge:", err);
+        }
       }
     } catch (err) {
       console.error("Failed to save draft:", err);
     } finally {
       setSaving(false);
     }
-  }, [username, saveDraftType, myPicks, pickOrder, saving, isCombo, occPicks, occPickOrder]);
+  }, [username, saveDraftType, myPicks, pickOrder, saving, isCombo, occPicks, occPickOrder, challengeMode]);
 
   const resetDraft = useCallback(() => {
     setPhase("setup");
@@ -922,12 +1185,87 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
     setComboPhase(1);
     setOccPicks([]);
     setOccPickOrder([]);
+    setChallengeMode(null);
+    setChallengeResult(null);
+    setChallengeUrl(null);
+    setChallengeError(null);
+    // Clear /challenge/{id} from browser URL so returning to drafter starts fresh
+    if (window.location.pathname.startsWith("/challenge/")) {
+      window.history.replaceState(null, "", "/");
+    }
   }, []);
 
   const resetToModePicker = useCallback(() => {
     resetDraft();
     setDrafterMode(null);
   }, [resetDraft]);
+
+  // ── Challenge: save draft (if needed) + create challenge ─────────────────
+  const [challengeError, setChallengeError] = useState(null);
+  const handleCreateChallenge = useCallback(async (combos) => {
+    if (challengeCreating) return;
+    setChallengeCreating(true);
+    setChallengeError(null);
+    try {
+      const allPicks = isCombo ? [...occPicks, ...myPicks] : myPicks;
+      const allPickOrder = isCombo ? [...occPickOrder, ...pickOrder.map(r => r + occPickOrder.length)] : pickOrder;
+      const commentEl = document.getElementById("draft-comment");
+      const comment = commentEl ? commentEl.value.trim() : "";
+
+      // Auto-save draft first if not already saved
+      if (!saved) {
+        const saveRes = await saveDraft(username, saveDraftType, allPicks, allPickOrder, comment, combos || []);
+        setSaved(true);
+        setSaveResult(saveRes);
+      }
+
+      // Now create the challenge
+      const result = await createChallenge({
+        seed: draftSeed,
+        draftType: saveDraftType,
+        drafterMode,
+        deckSelection: selectedDecks || [],
+        norwayOnly: norwayOnly ? 1 : 0,
+        creatorName: username,
+        creatorPicks: allPicks,
+        creatorPickOrder: allPickOrder,
+        creatorComment: comment,
+        creatorCombos: (combos || []).map(c => ({ cardIds: c.cardIds, comment: c.comment || "" })),
+      });
+      if (result.ok) {
+        setChallengeUrl(`${window.location.origin}/challenge/${result.challengeId}`);
+      } else {
+        setChallengeError(result.error || "Failed to create challenge");
+      }
+    } catch (err) {
+      console.error("Failed to create challenge:", err);
+      setChallengeError("Network error — please try again");
+    } finally {
+      setChallengeCreating(false);
+    }
+  }, [challengeCreating, draftSeed, saveDraftType, drafterMode, selectedDecks, norwayOnly, username, myPicks, pickOrder, isCombo, occPicks, occPickOrder, saved]);
+
+  // ── Challenge: detect /challenge/{id} URL on mount ─────────────────────
+  useEffect(() => {
+    const path = window.location.pathname;
+    if (path.startsWith("/challenge/")) {
+      const id = path.split("/")[2];
+      if (!id) return;
+      fetchChallenge(id).then(data => {
+        setChallengeMode(data);
+        setDrafterMode(data.drafterMode === "fullCombo" ? "fullCombo" : "full");
+        setDraftType(data.draftType || "Occupation");
+        if (data.deckSelection) setSelectedDecks(data.deckSelection);
+        if (data.norwayOnly != null) setNorwayOnly(data.norwayOnly);
+        setPhase("setup");
+        // Clear the /challenge/ URL immediately so it won't re-trigger
+        window.history.replaceState(null, "", "/");
+      }).catch(() => {
+        console.error("Challenge not found");
+        window.history.replaceState(null, "", "/");
+      });
+    }
+  }, []);
 
   // ── Mode picker screen ──────────────────────────────────────────────────
   if (drafterMode === null) {
@@ -942,12 +1280,10 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, maxWidth: 500, margin: "0 auto" }}>
               {[
-                { mode: "full", emoji: "\uD83C\uDFAF", title: "All Cards Draft", sub: "Pick 7 from packs of 9", detail: "Choose your decks, full customization", hoverColor: T.accent },
-                { mode: "mini", emoji: "\uD83C\uDDF3\uD83C\uDDF4", title: "Mini Draft", sub: "Pick 5 from a fixed deck of 9", detail: "Norway Deck, 100 fixed decks", hoverColor: T.red },
-                { mode: "fullCombo", emoji: "\uD83C\uDFAF\uD83C\uDFAF", title: "All Cards Full Draft", sub: "Draft 7 occus + 7 minors", detail: "Full game hand — combo across all 14 cards", hoverColor: T.purple },
-                { mode: "miniCombo", emoji: "\uD83C\uDDF3\uD83C\uDDF4\u2728", title: "Mini Full Draft", sub: "Pick 5 occus + 5 minors", detail: "Full mini hand — combo across all 10 cards", hoverColor: T.blue },
+                { mode: "full", emoji: "\uD83C\uDFAF", title: "Short Draft", sub: "Pick 7 from packs of 9", detail: "Occupations or minor improvements", hoverColor: T.accent },
+                { mode: "fullCombo", emoji: "\uD83C\uDFAF\uD83C\uDFAF", title: "Full Draft", sub: "Draft 7 occus + 7 minors", detail: "Full game hand — combo across all 14 cards", hoverColor: T.purple },
               ].map(({ mode, emoji, title, sub, detail, hoverColor }) => (
-                <button key={mode} onClick={() => { setDrafterMode(mode); setShowStats(!mode.startsWith("mini")); }}
+                <button key={mode} onClick={() => { setDrafterMode(mode); setShowStats(true); }}
                   style={{
                     padding: "24px 16px", borderRadius: 14,
                     border: `2px solid ${T.border}`, background: T.surface, cursor: "pointer",
@@ -977,21 +1313,42 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div style={{ maxWidth: 460, width: "100%", padding: 24 }}>
             <div style={{ textAlign: "center", marginBottom: 32 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginBottom: 4 }}>
-                <div style={{ fontSize: 28, fontWeight: 700, color: T.accent }}>
-                  {modeConfig.label}
-                </div>
-              </div>
-              <div style={{ fontSize: 14, color: T.textSecondary }}>
-                {modeConfig.desc}
-              </div>
-              <button onClick={resetToModePicker}
-                style={{
-                  marginTop: 8, background: "none", border: "none",
-                  color: T.blue, fontSize: 12, cursor: "pointer", textDecoration: "underline",
-                }}>
-                {"\u2190"} Change draft mode
-              </button>
+              {challengeMode ? (
+                <>
+                  <div style={{
+                    padding: "12px 16px", borderRadius: 10, background: "#f5f3ff",
+                    border: `1px solid ${T.purple}44`, marginBottom: 16,
+                  }}>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: T.purple, marginBottom: 4 }}>
+                      {"\u2694\uFE0F"} Challenge from {challengeMode.creatorName}
+                    </div>
+                    <div style={{ fontSize: 12, color: T.textSecondary }}>
+                      Draft the same table and compare your picks!
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: T.accent, marginBottom: 4 }}>
+                    {modeConfig.label}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginBottom: 4 }}>
+                    <div style={{ fontSize: 28, fontWeight: 700, color: T.accent }}>
+                      {modeConfig.label}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 14, color: T.textSecondary }}>
+                    {modeConfig.desc}
+                  </div>
+                  <button onClick={resetToModePicker}
+                    style={{
+                      marginTop: 8, background: "none", border: "none",
+                      color: T.blue, fontSize: 12, cursor: "pointer", textDecoration: "underline",
+                    }}>
+                    {"\u2190"} Change draft mode
+                  </button>
+                </>
+              )}
             </div>
 
             {/* Username */}
@@ -1009,8 +1366,8 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
               />
             </div>
 
-            {/* Draft type — hidden for combo modes (always both) */}
-            {!isCombo && (
+            {/* Draft type — hidden for combo modes (always both) and challenge mode */}
+            {!isCombo && !challengeMode && (
             <div style={{ marginBottom: 24 }}>
               <label style={{ fontSize: 11, color: T.textMuted, textTransform: "uppercase", letterSpacing: 1, display: "block", marginBottom: 6 }}>
                 Draft Type
@@ -1090,8 +1447,8 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
               </div>
             )}
 
-            {/* Card pool toggle — only for full modes */}
-            {!isMini && (
+            {/* Card pool toggle — only for full modes, hidden in challenge */}
+            {!isMini && !challengeMode && (
               <div style={{ marginBottom: 20 }}>
                 <label style={{ fontSize: 11, color: T.textMuted, textTransform: "uppercase", letterSpacing: 1, display: "block", marginBottom: 6 }}>
                   Card Pool
@@ -1117,8 +1474,8 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
               </div>
             )}
 
-            {/* Deck selection — only for Full Drafter */}
-            {!isMini && (
+            {/* Deck selection — only for Full Drafter, hidden in challenge */}
+            {!isMini && !challengeMode && (
               <div style={{ marginBottom: 24 }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
                   <label style={{ fontSize: 11, color: T.textMuted, textTransform: "uppercase", letterSpacing: 1 }}>
@@ -1189,16 +1546,16 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
             </div>
 
             {/* Start */}
-            <button onClick={startDraft}
-              disabled={!canStart}
+            <button onClick={() => challengeMode ? startDraft(challengeMode.seed) : startDraft()}
+              disabled={!canStart && !challengeMode}
               style={{
                 width: "100%", padding: "14px 24px", borderRadius: 10, border: "none",
-                background: canStart ? T.accent : T.border,
-                color: canStart ? "#fff" : T.textMuted,
-                fontSize: 16, fontWeight: 700, cursor: canStart ? "pointer" : "default",
+                background: (canStart || challengeMode) ? T.accent : T.border,
+                color: (canStart || challengeMode) ? "#fff" : T.textMuted,
+                fontSize: 16, fontWeight: 700, cursor: (canStart || challengeMode) ? "pointer" : "default",
                 transition: "all 0.2s",
               }}>
-              {isMini ? `Start Deck #${miniDeckNumber}` : "Start Draft"}
+              {challengeMode ? "\u2694\uFE0F Accept Challenge" : isMini ? `Start Deck #${miniDeckNumber}` : "Start Draft"}
             </button>
 
             {/* Community stats link */}
@@ -1443,7 +1800,20 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
           isCombo={isCombo}
           occPicks={occPicks}
           minorPicks={isCombo ? myPicks : []}
+          onCreateChallenge={challengeMode ? null : handleCreateChallenge}
+          challengeUrl={challengeUrl}
+          challengeCreating={challengeCreating}
+          challengeError={challengeError}
         />
+
+        {/* Challenge comparison (shown after challenger saves) */}
+        {challengeResult && (
+          <ChallengeComparison
+            comparison={challengeResult}
+            allCards={allCards}
+            onNewDraft={resetDraft}
+          />
+        )}
 
         <div style={{ maxWidth: 900, margin: "0 auto", padding: "0 24px 24px" }}>
           <div style={{ border: `1px solid ${T.border}`, borderRadius: 10, overflow: "hidden", background: T.surface }}>

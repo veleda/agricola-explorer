@@ -270,6 +270,33 @@ def _get_db() -> sqlite3.Connection:
             conn.execute("UPDATE drafts SET picksHash = ? WHERE id = ?", (h, row[0]))
     if "combos" not in cols:
         conn.execute("ALTER TABLE drafts ADD COLUMN combos TEXT DEFAULT '[]'")
+    if "challengeId" not in cols:
+        conn.execute("ALTER TABLE drafts ADD COLUMN challengeId TEXT DEFAULT NULL")
+
+    # ── Challenges table ──────────────────────────────────────────────────────
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS challenges (
+            id                 TEXT PRIMARY KEY,
+            seed               INTEGER NOT NULL,
+            draftType          TEXT NOT NULL,
+            drafterMode        TEXT NOT NULL,
+            deckSelection      TEXT NOT NULL,
+            norwayOnly         INTEGER NOT NULL DEFAULT 1,
+            creatorName        TEXT NOT NULL,
+            creatorPicks       TEXT NOT NULL DEFAULT '[]',
+            creatorPickOrder   TEXT NOT NULL DEFAULT '[]',
+            creatorComment     TEXT DEFAULT '',
+            creatorCombos      TEXT DEFAULT '[]',
+            challengerName     TEXT DEFAULT NULL,
+            challengerPicks    TEXT DEFAULT NULL,
+            challengerPickOrder TEXT DEFAULT NULL,
+            challengerComment  TEXT DEFAULT NULL,
+            challengerCombos   TEXT DEFAULT NULL,
+            createdAt          TEXT NOT NULL,
+            completedAt        TEXT DEFAULT NULL
+        )
+    """)
+
     # ── Scores table ──────────────────────────────────────────────────────────
     conn.execute("""
         CREATE TABLE IF NOT EXISTS scores (
@@ -312,14 +339,15 @@ class ComboTag(BaseModel):
 
 class DraftSaveRequest(BaseModel):
     username: str
-    draftType: str             # "Occupation", "MinorImprovement", "MiniOccupation", "MiniMinorImprovement"
+    draftType: str             # "Occupation", "MinorImprovement", "FullCombo"
     picks: list[str]           # card IDs in pick order
     pickOrder: list[int]       # round number for each pick
     comment: str = ""          # optional player note
     combos: list[ComboTag] = []  # tagged card combos
+    challengeId: Optional[str] = None  # if part of a challenge
 
-_VALID_DRAFT_TYPES = {"Occupation", "MinorImprovement", "MiniOccupation", "MiniMinorImprovement", "FullCombo", "MiniCombo"}
-_PICK_COUNTS = {"Occupation": 7, "MinorImprovement": 7, "MiniOccupation": 5, "MiniMinorImprovement": 5, "FullCombo": 14, "MiniCombo": 10}
+_VALID_DRAFT_TYPES = {"Occupation", "MinorImprovement", "FullCombo"}
+_PICK_COUNTS = {"Occupation": 7, "MinorImprovement": 7, "FullCombo": 14}
 
 @app.post("/api/drafts")
 def save_draft(req: DraftSaveRequest):
@@ -363,10 +391,10 @@ def save_draft(req: DraftSaveRequest):
     combos_json = json.dumps([{"cardIds": c.cardIds, "comment": (c.comment or "").strip()[:200]} for c in (req.combos or [])])
 
     conn.execute(
-        "INSERT INTO drafts (id, username, draftType, picks, pickOrder, timestamp, comment, picksHash, combos) VALUES (?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO drafts (id, username, draftType, picks, pickOrder, timestamp, comment, picksHash, combos, challengeId) VALUES (?,?,?,?,?,?,?,?,?,?)",
         (draft_id, req.username.strip(), req.draftType,
          json.dumps(req.picks), json.dumps(req.pickOrder), ts,
-         (req.comment or "").strip()[:500], ph, combos_json),
+         (req.comment or "").strip()[:500], ph, combos_json, req.challengeId),
     )
     conn.commit()
 
@@ -445,6 +473,231 @@ def draft_stats(draftType: Optional[str] = None):
         "totalDrafts": len(rows),
         "roundTop": round_top,
         "overallTop": [{"cardId": cid, "count": cnt} for cid, cnt in overall_top],
+    }
+
+# ── Challenge endpoints ──────────────────────────────────────────────────────
+
+def _generate_challenge_id() -> str:
+    """Generate a short URL-friendly challenge ID (8 alphanumeric chars)."""
+    import secrets
+    import string
+    chars = string.ascii_letters + string.digits
+    return ''.join(secrets.choice(chars) for _ in range(8))
+
+class CreateChallengeRequest(BaseModel):
+    seed: int
+    draftType: str
+    drafterMode: str
+    deckSelection: list[str]  # card IDs in the available pool
+    norwayOnly: int           # 0 or 1
+    creatorName: str
+    creatorPicks: list[str]   # card IDs picked by creator
+    creatorPickOrder: list[int]  # round numbers
+    creatorComment: str = ""
+    creatorCombos: list[ComboTag] = []
+
+@app.post("/api/challenges")
+def create_challenge(req: CreateChallengeRequest):
+    if not req.creatorName.strip():
+        return JSONResponse(status_code=400, content={"error": "creatorName required"})
+    if req.draftType not in _VALID_DRAFT_TYPES:
+        return JSONResponse(status_code=400, content={"error": "invalid draftType"})
+    if len(req.creatorPicks) != _PICK_COUNTS.get(req.draftType):
+        return JSONResponse(status_code=400, content={"error": f"invalid pick count for {req.draftType}"})
+
+    challenge_id = _generate_challenge_id()
+    ts = datetime.datetime.utcnow().isoformat() + "Z"
+
+    conn = _get_db()
+    conn.execute(
+        """INSERT INTO challenges
+           (id, seed, draftType, drafterMode, deckSelection, norwayOnly,
+            creatorName, creatorPicks, creatorPickOrder, creatorComment, creatorCombos, createdAt)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (challenge_id, req.seed, req.draftType, req.drafterMode,
+         json.dumps(req.deckSelection), req.norwayOnly,
+         req.creatorName.strip(),
+         json.dumps(req.creatorPicks), json.dumps(req.creatorPickOrder),
+         (req.creatorComment or "").strip()[:500],
+         json.dumps([{"cardIds": c.cardIds, "comment": (c.comment or "").strip()[:200]} for c in (req.creatorCombos or [])]),
+         ts)
+    )
+    conn.commit()
+    conn.close()
+
+    return {"ok": True, "challengeId": challenge_id}
+
+@app.get("/api/challenges/{id}")
+def get_challenge(id: str):
+    conn = _get_db()
+    row = conn.execute("SELECT * FROM challenges WHERE id = ?", (id,)).fetchone()
+    conn.close()
+
+    if not row:
+        return JSONResponse(status_code=404, content={"error": "Challenge not found"})
+
+    d = dict(row)
+    d["deckSelection"] = json.loads(d["deckSelection"])
+    d["creatorPicks"] = json.loads(d["creatorPicks"])
+    d["creatorPickOrder"] = json.loads(d["creatorPickOrder"])
+    d["creatorCombos"] = json.loads(d.get("creatorCombos") or "[]")
+    d["completed"] = d["completedAt"] is not None
+
+    # If not completed, hide creator's picks to avoid spoiling
+    if not d["completed"]:
+        d.pop("creatorPicks", None)
+        d.pop("creatorPickOrder", None)
+        d.pop("creatorComment", None)
+        d.pop("creatorCombos", None)
+
+    # Parse challenger data if present
+    if d.get("challengerPicks"):
+        d["challengerPicks"] = json.loads(d["challengerPicks"])
+    if d.get("challengerPickOrder"):
+        d["challengerPickOrder"] = json.loads(d["challengerPickOrder"])
+    if d.get("challengerCombos"):
+        d["challengerCombos"] = json.loads(d["challengerCombos"])
+
+    return d
+
+class SubmitChallengeRequest(BaseModel):
+    challengerName: str
+    picks: list[str]
+    pickOrder: list[int]
+    comment: str = ""
+    combos: list[ComboTag] = []
+
+@app.post("/api/challenges/{id}/complete")
+def complete_challenge(id: str, req: SubmitChallengeRequest):
+    if not req.challengerName.strip():
+        return JSONResponse(status_code=400, content={"error": "challengerName required"})
+
+    conn = _get_db()
+    row = conn.execute("SELECT * FROM challenges WHERE id = ?", (id,)).fetchone()
+
+    if not row:
+        conn.close()
+        return JSONResponse(status_code=404, content={"error": "Challenge not found"})
+
+    if row["completedAt"]:
+        conn.close()
+        return JSONResponse(status_code=400, content={"error": "Challenge already completed"})
+
+    d = dict(row)
+    expected_picks = _PICK_COUNTS.get(d["draftType"])
+    if len(req.picks) != expected_picks:
+        conn.close()
+        return JSONResponse(status_code=400, content={"error": f"invalid pick count"})
+
+    # Mark challenge as completed
+    ts = datetime.datetime.utcnow().isoformat() + "Z"
+    combos_json = json.dumps([{"cardIds": c.cardIds, "comment": (c.comment or "").strip()[:200]} for c in (req.combos or [])])
+
+    conn.execute(
+        """UPDATE challenges
+           SET challengerName = ?, challengerPicks = ?, challengerPickOrder = ?,
+               challengerComment = ?, challengerCombos = ?, completedAt = ?
+           WHERE id = ?""",
+        (req.challengerName.strip(),
+         json.dumps(req.picks), json.dumps(req.pickOrder),
+         (req.comment or "").strip()[:500], combos_json, ts, id)
+    )
+    conn.commit()
+
+    # Fetch updated row
+    row = conn.execute("SELECT * FROM challenges WHERE id = ?", (id,)).fetchone()
+    conn.close()
+
+    # Build comparison
+    creator_picks = json.loads(row["creatorPicks"])
+    overlap = [card_id for card_id in creator_picks if card_id in req.picks]
+
+    comparison = {
+        "creator": {
+            "name": row["creatorName"],
+            "picks": creator_picks,
+            "combos": json.loads(row.get("creatorCombos") or "[]"),
+            "comment": row.get("creatorComment") or "",
+        },
+        "challenger": {
+            "name": req.challengerName.strip(),
+            "picks": req.picks,
+            "combos": [{"cardIds": c.cardIds, "comment": (c.comment or "").strip()[:200]} for c in (req.combos or [])],
+            "comment": (req.comment or "").strip()[:500],
+        },
+        "overlap": overlap,
+        "draftType": d["draftType"],
+        "drafterMode": d["drafterMode"],
+    }
+
+    return {"ok": True, "comparison": comparison}
+
+@app.get("/api/challenges/{id}/compare")
+def get_challenge_comparison(id: str):
+    conn = _get_db()
+    row = conn.execute("SELECT * FROM challenges WHERE id = ?", (id,)).fetchone()
+    conn.close()
+
+    if not row or not row["completedAt"]:
+        return JSONResponse(status_code=404, content={"error": "Challenge not found or not completed"})
+
+    d = dict(row)
+    creator_picks = json.loads(d["creatorPicks"])
+    challenger_picks = json.loads(d["challengerPicks"])
+    overlap = [card_id for card_id in creator_picks if card_id in challenger_picks]
+
+    return {
+        "creator": {
+            "name": d["creatorName"],
+            "picks": creator_picks,
+            "combos": json.loads(d.get("creatorCombos") or "[]"),
+            "comment": d.get("creatorComment") or "",
+        },
+        "challenger": {
+            "name": d["challengerName"],
+            "picks": challenger_picks,
+            "combos": json.loads(d.get("challengerCombos") or "[]"),
+            "comment": d.get("challengerComment") or "",
+        },
+        "overlap": overlap,
+        "draftType": d["draftType"],
+        "drafterMode": d["drafterMode"],
+    }
+
+@app.get("/api/challenges")
+def list_challenges(page: int = 1, pageSize: int = 20):
+    """List all challenges, newest first."""
+    conn = _get_db()
+    offset = (page - 1) * pageSize
+
+    total = conn.execute("SELECT COUNT(*) FROM challenges").fetchone()[0]
+    rows = conn.execute(
+        "SELECT * FROM challenges ORDER BY createdAt DESC LIMIT ? OFFSET ?",
+        (pageSize, offset)
+    ).fetchall()
+    conn.close()
+
+    challenges = []
+    for row in rows:
+        d = dict(row)
+        d["creatorPicks"] = json.loads(d["creatorPicks"])
+        d["creatorPickOrder"] = json.loads(d["creatorPickOrder"])
+        d["creatorCombos"] = json.loads(d.get("creatorCombos") or "[]")
+        d["deckSelection"] = json.loads(d["deckSelection"])
+        if d.get("challengerPicks"):
+            d["challengerPicks"] = json.loads(d["challengerPicks"])
+        if d.get("challengerPickOrder"):
+            d["challengerPickOrder"] = json.loads(d["challengerPickOrder"])
+        if d.get("challengerCombos"):
+            d["challengerCombos"] = json.loads(d["challengerCombos"])
+        d["completed"] = d["completedAt"] is not None
+        challenges.append(d)
+
+    return {
+        "challenges": challenges,
+        "total": total,
+        "page": page,
+        "totalPages": max(1, (total + pageSize - 1) // pageSize),
     }
 
 # ── Community Hands endpoints ────────────────────────────────────────────────
@@ -1054,6 +1307,10 @@ DIST_DIR = os.path.join(os.path.dirname(__file__), "..", "ui", "dist")
 # UUID regex for card IRIs
 import re as _re
 _UUID_RE = _re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+
+IMG_DIR = os.path.join(os.path.dirname(__file__), "..", "img")
+if os.path.isdir(IMG_DIR):
+    app.mount("/img", StaticFiles(directory=IMG_DIR), name="card-images")
 
 if os.path.isdir(DIST_DIR):
     app.mount("/assets", StaticFiles(directory=os.path.join(DIST_DIR, "assets")), name="assets")
