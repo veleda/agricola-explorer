@@ -19,6 +19,7 @@ COPY data_engineering.py .
 COPY ontology.ttl .
 COPY tpl/ tpl/
 COPY data/ data/
+COPY img/ img/
 COPY backend/ backend/
 
 # Copy built frontend from stage 1
