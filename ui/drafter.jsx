@@ -132,6 +132,12 @@ async function submitChallenge(id, data) {
   const res = await fetch(`${API_BASE}/api/challenges/${id}/complete`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data),
   });
+  const body = await res.json();
+  return { ok: res.ok, status: res.status, ...body };
+}
+async function fetchChallengeComparison(id) {
+  const res = await fetch(`${API_BASE}/api/challenges/${id}/compare`);
+  if (!res.ok) throw new Error("Comparison not available");
   return res.json();
 }
 
@@ -670,108 +676,175 @@ function DraftResults({ picks, allCards, draftType, saveDraftType, username, onS
 
 // ── Challenge Comparison (side-by-side) ─────────────────────────────────────
 function ChallengeComparison({ comparison, allCards, onNewDraft }) {
+  const initialExpand = comparison && comparison.myAttemptIndex != null && comparison.myAttemptIndex >= 0
+    ? comparison.myAttemptIndex
+    : (comparison && comparison.attempts && comparison.attempts.length > 0 ? 0 : -1);
+  const [expandedIdx, setExpandedIdx] = useState(initialExpand);
+
   if (!comparison) return null;
-  const { creator, challenger, overlap, draftType } = comparison;
+  const { creator, attempts = [], draftType, myAttemptIndex } = comparison;
+  const totalPicks = (creator.picks || []).length;
 
   const resolveCards = (ids) => (ids || []).map(id => allCards.find(c => c.id === id)).filter(Boolean);
   const creatorCards = resolveCards(creator.picks);
-  const challengerCards = resolveCards(challenger.picks);
-  const overlapSet = new Set(overlap || []);
 
   const avgStat = (cards, field) => {
     const valid = cards.filter(c => c[field] > 0);
     return valid.length > 0 ? valid.reduce((s, c) => s + c[field], 0) / valid.length : 0;
   };
 
-  const PlayerHand = ({ name, cards, comment, isCreator }) => {
-    const avgWin = cards.length > 0 ? cards.reduce((s, c) => s + (c.winRatio || 0), 0) / cards.length : 0;
-    const avgPwr = avgStat(cards, "pwr");
-    const avgAdp = avgStat(cards, "adp");
-    return (
-      <div style={{ flex: 1, minWidth: 280 }}>
-        <div style={{
-          fontSize: 14, fontWeight: 700, color: isCreator ? T.accent : T.purple,
-          marginBottom: 8, textAlign: "center",
+  const statsFor = (cards) => ({
+    avgWin: cards.length > 0 ? cards.reduce((s, c) => s + (c.winRatio || 0), 0) / cards.length : 0,
+    avgPwr: avgStat(cards, "pwr"),
+    avgAdp: avgStat(cards, "adp"),
+  });
+
+  const StatsBadges = ({ stats }) => (
+    <div style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 12, flexWrap: "wrap" }}>
+      {[
+        ["Win", `${(stats.avgWin * 100).toFixed(1)}%`, T.blue],
+        ["PWR", stats.avgPwr > 0 ? stats.avgPwr.toFixed(1) : "\u2013", T.purple],
+        ["ADP", stats.avgAdp > 0 ? stats.avgAdp.toFixed(1) : "\u2013", T.accent],
+      ].map(([label, val, color]) => (
+        <div key={label} style={{
+          padding: "6px 12px", borderRadius: 8, background: T.surface,
+          border: `1px solid ${T.border}`, textAlign: "center", minWidth: 60,
         }}>
-          {name}{isCreator ? " (Creator)" : " (Challenger)"}
+          <div style={{ fontSize: 16, fontWeight: 700, color }}>{val}</div>
+          <div style={{ fontSize: 9, color: T.textMuted, textTransform: "uppercase" }}>{label}</div>
         </div>
-        <div style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 12, flexWrap: "wrap" }}>
-          {[
-            ["Win", `${(avgWin * 100).toFixed(1)}%`, T.blue],
-            ["PWR", avgPwr > 0 ? avgPwr.toFixed(1) : "–", T.purple],
-            ["ADP", avgAdp > 0 ? avgAdp.toFixed(1) : "–", T.accent],
-          ].map(([label, val, color]) => (
-            <div key={label} style={{
-              padding: "6px 12px", borderRadius: 8, background: T.surface,
-              border: `1px solid ${T.border}`, textAlign: "center", minWidth: 60,
-            }}>
-              <div style={{ fontSize: 16, fontWeight: 700, color }}>{val}</div>
-              <div style={{ fontSize: 9, color: T.textMuted, textTransform: "uppercase" }}>{label}</div>
-            </div>
-          ))}
-        </div>
-        <div style={{
-          display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))",
-          gap: 8,
-        }}>
-          {cards.map(c => {
-            const isOverlap = overlapSet.has(c.id);
-            return (
-              <div key={c.id} style={{
-                borderRadius: 8, overflow: "hidden",
-                border: isOverlap ? `2px solid ${T.green}` : `1px solid ${T.border}`,
-                background: isOverlap ? T.greenLight : T.surface,
-              }}>
-                <CardImageOrFallback card={c} hideStats={false} />
-                <div style={{ padding: "4px 6px" }}>
-                  <div style={{ fontSize: 10, fontWeight: 600, color: T.text }}>{c.name}</div>
-                  {isOverlap && (
-                    <div style={{ fontSize: 9, color: T.green, fontWeight: 600 }}>Same pick!</div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-        {comment && (
-          <div style={{
-            marginTop: 8, padding: "6px 10px", borderRadius: 6, background: T.surfaceAlt,
-            fontSize: 11, color: T.textSecondary, fontStyle: "italic",
+      ))}
+    </div>
+  );
+
+  const CardGrid = ({ cards, overlapSet }) => (
+    <div style={{
+      display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 8,
+    }}>
+      {cards.map(c => {
+        const isOverlap = overlapSet.has(c.id);
+        return (
+          <div key={c.id} style={{
+            borderRadius: 8, overflow: "hidden",
+            border: isOverlap ? `2px solid ${T.green}` : `1px solid ${T.border}`,
+            background: isOverlap ? T.greenLight : T.surface,
           }}>
-            "{comment}"
+            <CardImageOrFallback card={c} hideStats={false} />
+            <div style={{ padding: "4px 6px" }}>
+              <div style={{ fontSize: 10, fontWeight: 600, color: T.text }}>{c.name}</div>
+              {isOverlap && (
+                <div style={{ fontSize: 9, color: T.green, fontWeight: 600 }}>Same pick!</div>
+              )}
+            </div>
           </div>
-        )}
-      </div>
-    );
-  };
+        );
+      })}
+    </div>
+  );
+
+  const creatorStats = statsFor(creatorCards);
 
   return (
-    <div style={{ padding: 24, maxWidth: 1000, margin: "0 auto" }}>
+    <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
       <div style={{ textAlign: "center", marginBottom: 24 }}>
         <div style={{ fontSize: 28, fontWeight: 700, color: T.purple, marginBottom: 4 }}>
           {"\u2694\uFE0F"} Challenge Results
         </div>
         <div style={{ fontSize: 14, color: T.textSecondary }}>
-          {draftType} draft — {overlap.length} card{overlap.length !== 1 ? "s" : ""} in common
+          {draftType} draft {"\u2014"} {attempts.length} attempt{attempts.length !== 1 ? "s" : ""}
         </div>
       </div>
 
-      {/* Overlap summary */}
-      {overlap.length > 0 && (
+      {/* Creator card at top */}
+      <div style={{
+        marginBottom: 24, padding: 16, borderRadius: 12,
+        background: T.surface, border: `2px solid ${T.accent}`,
+      }}>
         <div style={{
-          textAlign: "center", marginBottom: 20, padding: "10px 16px",
-          borderRadius: 10, background: T.greenLight, border: `1px solid ${T.green}44`,
+          fontSize: 14, fontWeight: 700, color: T.accent, marginBottom: 8, textAlign: "center",
         }}>
-          <span style={{ fontSize: 13, fontWeight: 600, color: T.green }}>
-            Matching cards: {resolveCards(overlap).map(c => c.name).join(", ")}
-          </span>
+          {creator.name} {"\u2014"} Creator
+        </div>
+        <StatsBadges stats={creatorStats} />
+        <CardGrid cards={creatorCards} overlapSet={new Set()} />
+        {creator.comment && (
+          <div style={{
+            marginTop: 10, padding: "6px 10px", borderRadius: 6, background: T.surfaceAlt,
+            fontSize: 11, color: T.textSecondary, fontStyle: "italic",
+          }}>
+            "{creator.comment}"
+          </div>
+        )}
+      </div>
+
+      {/* Leaderboard */}
+      <div style={{ marginBottom: 16, fontSize: 13, fontWeight: 700, color: T.text }}>
+        Leaderboard
+      </div>
+      {attempts.length === 0 && (
+        <div style={{ padding: 20, textAlign: "center", color: T.textMuted, fontSize: 13 }}>
+          No attempts yet. Be the first!
         </div>
       )}
-
-      {/* Side by side */}
-      <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
-        <PlayerHand name={creator.name} cards={creatorCards} comment={creator.comment} isCreator={true} />
-        <PlayerHand name={challenger.name} cards={challengerCards} comment={challenger.comment} isCreator={false} />
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {attempts.map((att, idx) => {
+          const isMe = myAttemptIndex != null && idx === myAttemptIndex;
+          const isOpen = idx === expandedIdx;
+          const overlapPct = totalPicks > 0 ? ((att.overlapCount / totalPicks) * 100).toFixed(0) : 0;
+          return (
+            <div key={att.id ?? att.name} style={{
+              borderRadius: 8,
+              border: `1px solid ${isMe ? T.purple : T.border}`,
+              background: isMe ? `${T.purple}10` : T.surface,
+              overflow: "hidden",
+            }}>
+              <button
+                onClick={() => setExpandedIdx(isOpen ? -1 : idx)}
+                style={{
+                  width: "100%", padding: "10px 14px", background: "transparent", border: "none",
+                  display: "flex", alignItems: "center", gap: 12, cursor: "pointer", textAlign: "left",
+                }}>
+                <div style={{
+                  minWidth: 28, textAlign: "center", fontSize: 14, fontWeight: 700,
+                  color: idx === 0 ? T.accent : T.textMuted,
+                }}>
+                  #{idx + 1}
+                </div>
+                <div style={{ flex: 1, fontSize: 13, fontWeight: 600, color: T.text }}>
+                  {att.name}{isMe ? " (you)" : ""}
+                </div>
+                <div style={{
+                  fontSize: 12, fontWeight: 700, color: T.green,
+                  padding: "3px 8px", borderRadius: 6, background: T.greenLight,
+                }}>
+                  {att.overlapCount}/{totalPicks} ({overlapPct}%)
+                </div>
+                <div style={{ fontSize: 14, color: T.textMuted, width: 12, textAlign: "center" }}>
+                  {isOpen ? "\u25BC" : "\u25B6"}
+                </div>
+              </button>
+              {isOpen && (() => {
+                const cards = resolveCards(att.picks);
+                const overlapSet = new Set((creator.picks || []).filter(p => (att.picks || []).includes(p)));
+                const stats = statsFor(cards);
+                return (
+                  <div style={{ padding: "12px 14px", borderTop: `1px solid ${T.border}` }}>
+                    <StatsBadges stats={stats} />
+                    <CardGrid cards={cards} overlapSet={overlapSet} />
+                    {att.comment && (
+                      <div style={{
+                        marginTop: 10, padding: "6px 10px", borderRadius: 6, background: T.surfaceAlt,
+                        fontSize: 11, color: T.textSecondary, fontStyle: "italic",
+                      }}>
+                        "{att.comment}"
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          );
+        })}
       </div>
 
       <div style={{ textAlign: "center", marginTop: 24 }}>
@@ -1161,9 +1234,20 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
           });
           if (challengeRes.ok && challengeRes.comparison) {
             setChallengeResult(challengeRes.comparison);
+            setChallengeError(null);
+          } else if (challengeRes.status === 409) {
+            // Duplicate name — still show leaderboard (without "you" highlight) and surface the reason.
+            try {
+              const compare = await fetchChallengeComparison(challengeMode.id);
+              setChallengeResult({ ...compare, myAttemptIndex: -1 });
+            } catch (_) { /* ignore */ }
+            setChallengeError(challengeRes.error || "That name has already taken this challenge. Try a different name.");
+          } else {
+            setChallengeError(challengeRes.error || "Failed to submit challenge attempt.");
           }
         } catch (err) {
           console.error("Failed to submit challenge:", err);
+          setChallengeError("Network error — please try again");
         }
       }
     } catch (err) {

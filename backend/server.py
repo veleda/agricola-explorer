@@ -297,6 +297,53 @@ def _get_db() -> sqlite3.Connection:
         )
     """)
 
+    # ── Challenge attempts table (one row per player attempt) ────────────────
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS challenge_attempts (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            challengeId    TEXT NOT NULL,
+            challengerName TEXT NOT NULL,
+            picks          TEXT NOT NULL,
+            pickOrder      TEXT NOT NULL,
+            comment        TEXT DEFAULT '',
+            combos         TEXT DEFAULT '[]',
+            overlapCount   INTEGER NOT NULL DEFAULT 0,
+            completedAt    TEXT NOT NULL,
+            UNIQUE (challengeId, challengerName)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_attempts_challenge ON challenge_attempts(challengeId, overlapCount DESC)")
+
+    # Migration: copy any legacy single-challenger data from challenges into challenge_attempts
+    legacy = conn.execute(
+        """SELECT id, creatorPicks, challengerName, challengerPicks, challengerPickOrder,
+                  challengerComment, challengerCombos, completedAt
+           FROM challenges
+           WHERE challengerName IS NOT NULL AND challengerPicks IS NOT NULL"""
+    ).fetchall()
+    for r in legacy:
+        existing = conn.execute(
+            "SELECT 1 FROM challenge_attempts WHERE challengeId = ? AND challengerName = ?",
+            (r["id"], r["challengerName"])
+        ).fetchone()
+        if existing:
+            continue
+        try:
+            creator_picks = json.loads(r["creatorPicks"] or "[]")
+            challenger_picks = json.loads(r["challengerPicks"] or "[]")
+            overlap_count = sum(1 for p in creator_picks if p in challenger_picks)
+            conn.execute(
+                """INSERT INTO challenge_attempts
+                   (challengeId, challengerName, picks, pickOrder, comment, combos, overlapCount, completedAt)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (r["id"], r["challengerName"],
+                 r["challengerPicks"], r["challengerPickOrder"] or "[]",
+                 r["challengerComment"] or "", r["challengerCombos"] or "[]",
+                 overlap_count, r["completedAt"] or datetime.datetime.utcnow().isoformat() + "Z")
+            )
+        except Exception as e:
+            print(f"  [migration] skipped legacy attempt on {r['id']}: {e}")
+
     # ── Scores table ──────────────────────────────────────────────────────────
     conn.execute("""
         CREATE TABLE IF NOT EXISTS scores (
@@ -527,36 +574,69 @@ def create_challenge(req: CreateChallengeRequest):
 
     return {"ok": True, "challengeId": challenge_id}
 
+def _fetch_attempt_summaries(conn, challenge_id: str) -> list[dict]:
+    """Return all attempts for a challenge as lightweight summaries (no picks)."""
+    rows = conn.execute(
+        """SELECT id, challengerName, overlapCount, completedAt
+           FROM challenge_attempts
+           WHERE challengeId = ?
+           ORDER BY overlapCount DESC, completedAt ASC""",
+        (challenge_id,)
+    ).fetchall()
+    return [
+        {"id": r["id"], "name": r["challengerName"],
+         "overlapCount": r["overlapCount"], "completedAt": r["completedAt"]}
+        for r in rows
+    ]
+
+def _fetch_full_attempts(conn, challenge_id: str) -> list[dict]:
+    """Return all attempts with full pick data, sorted by overlap DESC."""
+    rows = conn.execute(
+        """SELECT * FROM challenge_attempts
+           WHERE challengeId = ?
+           ORDER BY overlapCount DESC, completedAt ASC""",
+        (challenge_id,)
+    ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        out.append({
+            "id": d["id"],
+            "name": d["challengerName"],
+            "picks": json.loads(d["picks"]),
+            "pickOrder": json.loads(d["pickOrder"]),
+            "combos": json.loads(d.get("combos") or "[]"),
+            "comment": d.get("comment") or "",
+            "overlapCount": d["overlapCount"],
+            "completedAt": d["completedAt"],
+        })
+    return out
+
 @app.get("/api/challenges/{id}")
 def get_challenge(id: str):
+    """Challenge metadata for the drafter. Spoilers (creator picks, attempt picks)
+    are always hidden from this endpoint; use /compare to reveal them."""
     conn = _get_db()
     row = conn.execute("SELECT * FROM challenges WHERE id = ?", (id,)).fetchone()
-    conn.close()
-
     if not row:
+        conn.close()
         return JSONResponse(status_code=404, content={"error": "Challenge not found"})
+
+    attempts = _fetch_attempt_summaries(conn, id)
+    conn.close()
 
     d = dict(row)
     d["deckSelection"] = json.loads(d["deckSelection"])
-    d["creatorPicks"] = json.loads(d["creatorPicks"])
-    d["creatorPickOrder"] = json.loads(d["creatorPickOrder"])
-    d["creatorCombos"] = json.loads(d.get("creatorCombos") or "[]")
-    d["completed"] = d["completedAt"] is not None
+    d["attempts"] = attempts
+    d["attemptCount"] = len(attempts)
+    d["completed"] = len(attempts) > 0
 
-    # If not completed, hide creator's picks to avoid spoiling
-    if not d["completed"]:
-        d.pop("creatorPicks", None)
-        d.pop("creatorPickOrder", None)
-        d.pop("creatorComment", None)
-        d.pop("creatorCombos", None)
-
-    # Parse challenger data if present
-    if d.get("challengerPicks"):
-        d["challengerPicks"] = json.loads(d["challengerPicks"])
-    if d.get("challengerPickOrder"):
-        d["challengerPickOrder"] = json.loads(d["challengerPickOrder"])
-    if d.get("challengerCombos"):
-        d["challengerCombos"] = json.loads(d["challengerCombos"])
+    # Always hide creator picks/combos/comment from the drafter fetch.
+    # These are revealed via the /compare endpoint after the user finishes or opens the leaderboard.
+    for k in ("creatorPicks", "creatorPickOrder", "creatorComment", "creatorCombos",
+              "challengerName", "challengerPicks", "challengerPickOrder",
+              "challengerComment", "challengerCombos"):
+        d.pop(k, None)
 
     return d
 
@@ -579,53 +659,64 @@ def complete_challenge(id: str, req: SubmitChallengeRequest):
         conn.close()
         return JSONResponse(status_code=404, content={"error": "Challenge not found"})
 
-    if row["completedAt"]:
-        conn.close()
-        return JSONResponse(status_code=400, content={"error": "Challenge already completed"})
-
     d = dict(row)
     expected_picks = _PICK_COUNTS.get(d["draftType"])
     if len(req.picks) != expected_picks:
         conn.close()
-        return JSONResponse(status_code=400, content={"error": f"invalid pick count"})
+        return JSONResponse(status_code=400, content={"error": "invalid pick count"})
 
-    # Mark challenge as completed
+    challenger_name = req.challengerName.strip()
+
+    # Reject duplicate name on same challenge
+    existing = conn.execute(
+        "SELECT 1 FROM challenge_attempts WHERE challengeId = ? AND lower(challengerName) = lower(?)",
+        (id, challenger_name)
+    ).fetchone()
+    if existing:
+        conn.close()
+        return JSONResponse(
+            status_code=409,
+            content={"error": f"'{challenger_name}' has already taken this challenge. Try a different name."}
+        )
+
+    creator_picks = json.loads(d["creatorPicks"])
+    overlap_count = sum(1 for p in creator_picks if p in req.picks)
+
     ts = datetime.datetime.utcnow().isoformat() + "Z"
-    combos_json = json.dumps([{"cardIds": c.cardIds, "comment": (c.comment or "").strip()[:200]} for c in (req.combos or [])])
+    combos_json = json.dumps(
+        [{"cardIds": c.cardIds, "comment": (c.comment or "").strip()[:200]} for c in (req.combos or [])]
+    )
 
     conn.execute(
-        """UPDATE challenges
-           SET challengerName = ?, challengerPicks = ?, challengerPickOrder = ?,
-               challengerComment = ?, challengerCombos = ?, completedAt = ?
-           WHERE id = ?""",
-        (req.challengerName.strip(),
+        """INSERT INTO challenge_attempts
+           (challengeId, challengerName, picks, pickOrder, comment, combos, overlapCount, completedAt)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        (id, challenger_name,
          json.dumps(req.picks), json.dumps(req.pickOrder),
-         (req.comment or "").strip()[:500], combos_json, ts, id)
+         (req.comment or "").strip()[:500], combos_json, overlap_count, ts)
     )
-    conn.commit()
 
-    # Fetch updated row
-    row = conn.execute("SELECT * FROM challenges WHERE id = ?", (id,)).fetchone()
+    # Also update the first-completedAt on the challenge for legacy compatibility
+    if not row["completedAt"]:
+        conn.execute("UPDATE challenges SET completedAt = ? WHERE id = ?", (ts, id))
+
+    conn.commit()
+    attempts = _fetch_full_attempts(conn, id)
     conn.close()
 
-    # Build comparison
-    creator_picks = json.loads(row["creatorPicks"])
-    overlap = [card_id for card_id in creator_picks if card_id in req.picks]
+    # Locate the attempt the user just submitted so the UI can highlight it
+    my_attempt_idx = next((i for i, a in enumerate(attempts) if a["name"] == challenger_name), -1)
 
     comparison = {
+        "challengeId": id,
         "creator": {
             "name": row["creatorName"],
             "picks": creator_picks,
-            "combos": json.loads(row.get("creatorCombos") or "[]"),
-            "comment": row.get("creatorComment") or "",
+            "combos": json.loads(row["creatorCombos"] or "[]"),
+            "comment": row["creatorComment"] or "",
         },
-        "challenger": {
-            "name": req.challengerName.strip(),
-            "picks": req.picks,
-            "combos": [{"cardIds": c.cardIds, "comment": (c.comment or "").strip()[:200]} for c in (req.combos or [])],
-            "comment": (req.comment or "").strip()[:500],
-        },
-        "overlap": overlap,
+        "attempts": attempts,
+        "myAttemptIndex": my_attempt_idx,
         "draftType": d["draftType"],
         "drafterMode": d["drafterMode"],
     }
@@ -634,39 +725,36 @@ def complete_challenge(id: str, req: SubmitChallengeRequest):
 
 @app.get("/api/challenges/{id}/compare")
 def get_challenge_comparison(id: str):
+    """Full comparison view: creator hand + all attempts sorted by overlap."""
     conn = _get_db()
     row = conn.execute("SELECT * FROM challenges WHERE id = ?", (id,)).fetchone()
-    conn.close()
-
-    if not row or not row["completedAt"]:
-        return JSONResponse(status_code=404, content={"error": "Challenge not found or not completed"})
+    if not row:
+        conn.close()
+        return JSONResponse(status_code=404, content={"error": "Challenge not found"})
 
     d = dict(row)
+    attempts = _fetch_full_attempts(conn, id)
+    conn.close()
+
     creator_picks = json.loads(d["creatorPicks"])
-    challenger_picks = json.loads(d["challengerPicks"])
-    overlap = [card_id for card_id in creator_picks if card_id in challenger_picks]
 
     return {
+        "challengeId": id,
         "creator": {
             "name": d["creatorName"],
             "picks": creator_picks,
             "combos": json.loads(d.get("creatorCombos") or "[]"),
             "comment": d.get("creatorComment") or "",
         },
-        "challenger": {
-            "name": d["challengerName"],
-            "picks": challenger_picks,
-            "combos": json.loads(d.get("challengerCombos") or "[]"),
-            "comment": d.get("challengerComment") or "",
-        },
-        "overlap": overlap,
+        "attempts": attempts,
+        "attemptCount": len(attempts),
         "draftType": d["draftType"],
         "drafterMode": d["drafterMode"],
     }
 
 @app.get("/api/challenges")
 def list_challenges(page: int = 1, pageSize: int = 20):
-    """List all challenges, newest first."""
+    """List all challenges, newest first, with attempt counts and summaries."""
     conn = _get_db()
     offset = (page - 1) * pageSize
 
@@ -675,7 +763,6 @@ def list_challenges(page: int = 1, pageSize: int = 20):
         "SELECT * FROM challenges ORDER BY createdAt DESC LIMIT ? OFFSET ?",
         (pageSize, offset)
     ).fetchall()
-    conn.close()
 
     challenges = []
     for row in rows:
@@ -684,14 +771,16 @@ def list_challenges(page: int = 1, pageSize: int = 20):
         d["creatorPickOrder"] = json.loads(d["creatorPickOrder"])
         d["creatorCombos"] = json.loads(d.get("creatorCombos") or "[]")
         d["deckSelection"] = json.loads(d["deckSelection"])
-        if d.get("challengerPicks"):
-            d["challengerPicks"] = json.loads(d["challengerPicks"])
-        if d.get("challengerPickOrder"):
-            d["challengerPickOrder"] = json.loads(d["challengerPickOrder"])
-        if d.get("challengerCombos"):
-            d["challengerCombos"] = json.loads(d["challengerCombos"])
-        d["completed"] = d["completedAt"] is not None
+        attempts = _fetch_attempt_summaries(conn, d["id"])
+        d["attempts"] = attempts
+        d["attemptCount"] = len(attempts)
+        d["completed"] = len(attempts) > 0
+        # Drop the legacy single-challenger columns from the response
+        for k in ("challengerName", "challengerPicks", "challengerPickOrder",
+                  "challengerComment", "challengerCombos"):
+            d.pop(k, None)
         challenges.append(d)
+    conn.close()
 
     return {
         "challenges": challenges,

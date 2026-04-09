@@ -445,12 +445,19 @@ async function fetchChallenges(page) {
   const res = await fetch(`${API_BASE}/api/challenges?page=${page}&pageSize=20`);
   return res.json();
 }
+async function fetchChallengeAttempts(id) {
+  const res = await fetch(`${API_BASE}/api/challenges/${id}/compare`);
+  if (!res.ok) throw new Error("Failed to fetch attempts");
+  return res.json();
+}
 
 function ChallengesTab({ cardMap }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [expandedId, setExpandedId] = useState(null);
+  const [detailsCache, setDetailsCache] = useState({}); // challengeId -> full comparison
+  const [expandedAttempt, setExpandedAttempt] = useState({}); // challengeId -> attemptIdx
 
   useEffect(() => {
     setLoading(true);
@@ -458,6 +465,21 @@ function ChallengesTab({ cardMap }) {
       .then(d => { setData(d); setLoading(false); })
       .catch(() => setLoading(false));
   }, [page]);
+
+  const toggleExpand = async (ch) => {
+    const next = expandedId === ch.id ? null : ch.id;
+    setExpandedId(next);
+    if (next && !detailsCache[ch.id] && ch.attemptCount > 0) {
+      try {
+        const full = await fetchChallengeAttempts(ch.id);
+        setDetailsCache(prev => ({ ...prev, [ch.id]: full }));
+      } catch (_) { /* ignore */ }
+    }
+  };
+
+  const takeChallenge = (ch) => {
+    window.location.href = `/challenge/${ch.id}`;
+  };
 
   if (loading) return <div style={{ padding: 40, textAlign: "center", color: T.textMuted }}>Loading challenges...</div>;
   if (!data || data.challenges.length === 0) {
@@ -477,19 +499,19 @@ function ChallengesTab({ cardMap }) {
   return (
     <>
       <div style={{ fontSize: 11, color: T.textMuted, marginBottom: 10 }}>
-        {data.total} challenge{data.total !== 1 ? "s" : ""} — page {data.page} of {data.totalPages}
+        {data.total} challenge{data.total !== 1 ? "s" : ""} {"\u2014"} page {data.page} of {data.totalPages}
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {data.challenges.map(ch => {
           const isExpanded = expandedId === ch.id;
+          const attemptCount = ch.attemptCount || 0;
+          const topAttempt = (ch.attempts && ch.attempts[0]) || null;
           const creatorCards = (ch.creatorPicks || []).map(id => cardMap[id]).filter(Boolean);
-          const challengerCards = ch.completed ? (ch.challengerPicks || []).map(id => cardMap[id]).filter(Boolean) : [];
-          const overlap = ch.completed
-            ? (ch.creatorPicks || []).filter(id => (ch.challengerPicks || []).includes(id))
-            : [];
-          const overlapSet = new Set(overlap);
+          const totalPicks = (ch.creatorPicks || []).length;
           const challengeUrl = `${window.location.origin}/challenge/${ch.id}`;
+          const fullData = detailsCache[ch.id];
+          const openAttemptIdx = expandedAttempt[ch.id] ?? -1;
 
           return (
             <div key={ch.id} style={{
@@ -497,48 +519,56 @@ function ChallengesTab({ cardMap }) {
               overflow: "hidden",
             }}>
               {/* Summary row */}
-              <div onClick={() => setExpandedId(isExpanded ? null : ch.id)}
-                style={{
-                  padding: "12px 16px", cursor: "pointer", display: "flex",
-                  alignItems: "center", gap: 12, flexWrap: "wrap",
-                }}>
-                <div style={{ fontSize: 18 }}>{"\u2694\uFE0F"}</div>
-                <div style={{ flex: 1, minWidth: 120 }}>
+              <div style={{
+                padding: "12px 16px", display: "flex",
+                alignItems: "center", gap: 12, flexWrap: "wrap",
+              }}>
+                <div
+                  onClick={() => toggleExpand(ch)}
+                  style={{ fontSize: 18, cursor: "pointer" }}
+                >{"\u2694\uFE0F"}</div>
+                <div
+                  onClick={() => toggleExpand(ch)}
+                  style={{ flex: 1, minWidth: 120, cursor: "pointer" }}
+                >
                   <div style={{ fontSize: 13, fontWeight: 600, color: T.text }}>
                     {ch.creatorName}
-                    {ch.completed
-                      ? <span style={{ color: T.textSecondary, fontWeight: 400 }}> vs {ch.challengerName}</span>
-                      : <span style={{ color: T.textMuted, fontWeight: 400, fontStyle: "italic" }}> — waiting for challenger</span>}
+                    <span style={{ color: T.textSecondary, fontWeight: 400 }}>
+                      {attemptCount === 0
+                        ? " \u2014 waiting for a challenger"
+                        : ` \u2014 ${attemptCount} attempt${attemptCount !== 1 ? "s" : ""}`}
+                    </span>
                   </div>
                   <div style={{ fontSize: 11, color: T.textMuted, marginTop: 2 }}>
                     {ch.draftType === "FullCombo" ? "Full Draft" : ch.draftType === "Occupation" ? "Occupations" : "Minor Improvements"}
-                    {" · "}{new Date(ch.createdAt).toLocaleDateString()}
+                    {" \u00B7 "}{new Date(ch.createdAt).toLocaleDateString()}
+                    {topAttempt && (
+                      <span>{" \u00B7 "}top: {topAttempt.name} ({topAttempt.overlapCount}/{totalPicks})</span>
+                    )}
                   </div>
                 </div>
-                {ch.completed && (
-                  <div style={{
-                    padding: "4px 10px", borderRadius: 99, background: T.greenLight,
-                    color: T.green, fontSize: 11, fontWeight: 600,
+                <button
+                  onClick={(e) => { e.stopPropagation(); takeChallenge(ch); }}
+                  style={{
+                    padding: "6px 12px", borderRadius: 8, border: "none",
+                    background: T.purple, color: "#fff",
+                    fontSize: 11, fontWeight: 700, cursor: "pointer",
                   }}>
-                    {overlap.length} card{overlap.length !== 1 ? "s" : ""} in common
-                  </div>
-                )}
-                {!ch.completed && (
-                  <div style={{
-                    padding: "4px 10px", borderRadius: 99, background: "#f5f3ff",
-                    color: T.purple, fontSize: 11, fontWeight: 600,
-                  }}>
-                    Open
-                  </div>
-                )}
-                <div style={{ fontSize: 16, color: T.textMuted, transition: "transform 0.15s", transform: isExpanded ? "rotate(180deg)" : "rotate(0)" }}>{"\u25BC"}</div>
+                  {"\u2694\uFE0F"} Take Challenge
+                </button>
+                <div
+                  onClick={() => toggleExpand(ch)}
+                  style={{
+                    fontSize: 16, color: T.textMuted, cursor: "pointer",
+                    transition: "transform 0.15s", transform: isExpanded ? "rotate(180deg)" : "rotate(0)",
+                  }}>{"\u25BC"}</div>
               </div>
 
               {/* Expanded details */}
               {isExpanded && (
                 <div style={{ padding: "0 16px 16px", borderTop: `1px solid ${T.borderLight}` }}>
                   {/* Creator hand */}
-                  <div style={{ marginTop: 12, marginBottom: ch.completed ? 16 : 8 }}>
+                  <div style={{ marginTop: 12, marginBottom: 12 }}>
                     <div style={{ fontSize: 11, fontWeight: 700, color: T.accent, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
                       {ch.creatorName}'s hand
                     </div>
@@ -546,8 +576,7 @@ function ChallengesTab({ cardMap }) {
                       {creatorCards.map(c => (
                         <div key={c.id} style={{
                           padding: "3px 8px", borderRadius: 6, fontSize: 11,
-                          background: ch.completed && overlapSet.has(c.id) ? T.greenLight : T.surfaceAlt,
-                          border: `1px solid ${ch.completed && overlapSet.has(c.id) ? T.green + "44" : T.border}`,
+                          background: T.surfaceAlt, border: `1px solid ${T.border}`,
                           color: T.text, fontWeight: 500,
                         }}>
                           {c.name}
@@ -561,43 +590,91 @@ function ChallengesTab({ cardMap }) {
                     )}
                   </div>
 
-                  {/* Challenger hand (if completed) */}
-                  {ch.completed && (
-                    <div style={{ marginBottom: 12 }}>
+                  {/* Attempts leaderboard */}
+                  {attemptCount > 0 && (
+                    <div>
                       <div style={{ fontSize: 11, fontWeight: 700, color: T.purple, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
-                        {ch.challengerName}'s hand
+                        Leaderboard ({attemptCount})
                       </div>
-                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                        {challengerCards.map(c => (
-                          <div key={c.id} style={{
-                            padding: "3px 8px", borderRadius: 6, fontSize: 11,
-                            background: overlapSet.has(c.id) ? T.greenLight : T.surfaceAlt,
-                            border: `1px solid ${overlapSet.has(c.id) ? T.green + "44" : T.border}`,
-                            color: T.text, fontWeight: 500,
-                          }}>
-                            {c.name}
-                          </div>
-                        ))}
-                      </div>
-                      {ch.challengerComment && (
-                        <div style={{ fontSize: 11, color: T.textSecondary, fontStyle: "italic", marginTop: 4 }}>
-                          "{ch.challengerComment}"
+                      {!fullData ? (
+                        <div style={{ fontSize: 11, color: T.textMuted, padding: 8 }}>Loading attempts...</div>
+                      ) : (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                          {fullData.attempts.map((att, idx) => {
+                            const pct = totalPicks > 0 ? ((att.overlapCount / totalPicks) * 100).toFixed(0) : 0;
+                            const attOpen = openAttemptIdx === idx;
+                            const attCards = (att.picks || []).map(id => cardMap[id]).filter(Boolean);
+                            const creatorSet = new Set(ch.creatorPicks || []);
+                            return (
+                              <div key={att.id} style={{
+                                borderRadius: 6, border: `1px solid ${T.border}`, background: T.surface,
+                                overflow: "hidden",
+                              }}>
+                                <div
+                                  onClick={() => setExpandedAttempt(prev => ({ ...prev, [ch.id]: attOpen ? -1 : idx }))}
+                                  style={{
+                                    padding: "6px 10px", display: "flex", alignItems: "center",
+                                    gap: 10, cursor: "pointer",
+                                  }}>
+                                  <div style={{
+                                    minWidth: 24, textAlign: "center", fontSize: 11, fontWeight: 700,
+                                    color: idx === 0 ? T.accent : T.textMuted,
+                                  }}>#{idx + 1}</div>
+                                  <div style={{ flex: 1, fontSize: 12, fontWeight: 600, color: T.text }}>
+                                    {att.name}
+                                  </div>
+                                  <div style={{
+                                    fontSize: 11, fontWeight: 700, color: T.green,
+                                    padding: "2px 8px", borderRadius: 6, background: T.greenLight,
+                                  }}>
+                                    {att.overlapCount}/{totalPicks} ({pct}%)
+                                  </div>
+                                  <div style={{ fontSize: 12, color: T.textMuted, width: 10, textAlign: "center" }}>
+                                    {attOpen ? "\u25BC" : "\u25B6"}
+                                  </div>
+                                </div>
+                                {attOpen && (
+                                  <div style={{ padding: "6px 10px 10px", borderTop: `1px solid ${T.borderLight}` }}>
+                                    <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                                      {attCards.map(c => {
+                                        const isMatch = creatorSet.has(c.id);
+                                        return (
+                                          <div key={c.id} style={{
+                                            padding: "3px 8px", borderRadius: 6, fontSize: 11,
+                                            background: isMatch ? T.greenLight : T.surfaceAlt,
+                                            border: `1px solid ${isMatch ? T.green + "44" : T.border}`,
+                                            color: T.text, fontWeight: 500,
+                                          }}>
+                                            {c.name}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                    {att.comment && (
+                                      <div style={{ fontSize: 11, color: T.textSecondary, fontStyle: "italic", marginTop: 4 }}>
+                                        "{att.comment}"
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
                     </div>
                   )}
 
-                  {/* Challenge link for open challenges */}
-                  {!ch.completed && (
-                    <div style={{
-                      padding: "8px 12px", borderRadius: 8, background: "#f5f3ff",
-                      border: `1px solid ${T.purple}44`, fontSize: 12, color: T.textSecondary,
-                      display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap",
-                    }}>
-                      <span style={{ flex: 1, minWidth: 150, fontSize: 11, color: T.text, wordBreak: "break-all" }}>{challengeUrl}</span>
-                      <CopyButton text={challengeUrl} />
-                    </div>
-                  )}
+                  {/* Share link */}
+                  <div style={{
+                    marginTop: 12,
+                    padding: "8px 12px", borderRadius: 8, background: "#f5f3ff",
+                    border: `1px solid ${T.purple}44`, fontSize: 12, color: T.textSecondary,
+                    display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap",
+                  }}>
+                    <span style={{ flex: 1, minWidth: 150, fontSize: 11, color: T.text, wordBreak: "break-all" }}>{challengeUrl}</span>
+                    <CopyButton text={challengeUrl} />
+                  </div>
                 </div>
               )}
             </div>
