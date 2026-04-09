@@ -62,29 +62,30 @@ function shuffle(arr) {
   return a;
 }
 
-// NPC strategy: pick one of the two best ADP cards, but every 5th pick is random
-let _npcPickCounter = 0;
-function npcPick(cards, rng) {
+// NPC strategy:
+//   - NPCs 1 and 2: always pick the single best card (lowest ADP, or highest winRatio as fallback)
+//   - NPC 3: 90% best card, 10% fully random
+function npcPick(cards, rng, npcIndex) {
   if (cards.length === 0) return null;
   const rand = rng || Math.random;
-  _npcPickCounter++;
-  // Every 5th pick: choose completely at random (makes NPCs less perfect)
-  if (_npcPickCounter % 5 === 0) {
+
+  // NPC 3 has a 10% random pick rate
+  if (npcIndex === 3 && rand() < 0.1) {
     return cards[Math.floor(rand() * cards.length)];
   }
+
+  // All other cases: pick the single best card
   const withAdp = cards.filter(c => c.adp > 0);
   if (withAdp.length > 0) {
     // Sort ascending: lower ADP = picked earlier in tournaments = stronger
     withAdp.sort((a, b) => a.adp - b.adp);
-    const top = withAdp.slice(0, Math.min(2, withAdp.length));
-    return top[Math.floor(rand() * top.length)];
+    return withAdp[0];
   }
-  // Fallback: pick from top 2 by win ratio if no ADP data
+  // Fallback: highest win ratio if no ADP data
   const sorted = [...cards].sort((a, b) => (b.winRatio || 0) - (a.winRatio || 0));
-  const top = sorted.slice(0, Math.min(2, sorted.length));
-  return top[Math.floor(rand() * top.length)];
+  return sorted[0];
 }
-function npcPickReset() { _npcPickCounter = 0; }
+function npcPickReset() { /* no state to reset now, kept for API stability */ }
 
 // ── API helpers ─────────────────────────────────────────────────────────────
 async function saveDraft(username, draftType, picks, pickOrder, comment, combos, challengeId) {
@@ -1084,7 +1085,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
     const newPacks = packs.map(pack => [...pack]);
     newPacks[0] = newPacks[0].filter(c => c.id !== card.id);
     for (let npc = 1; npc < NUM_PLAYERS; npc++) {
-      const pick = npcPick(newPacks[npc], rngRef.current);
+      const pick = npcPick(newPacks[npc], rngRef.current, npc);
       if (pick) newPacks[npc] = newPacks[npc].filter(c => c.id !== pick.id);
     }
     const rotated = [newPacks[1], newPacks[2], newPacks[3], newPacks[0]];
