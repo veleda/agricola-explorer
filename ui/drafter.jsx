@@ -87,6 +87,37 @@ function npcPick(cards, rng, npcIndex) {
 }
 function npcPickReset() { /* no state to reset now, kept for API stability */ }
 
+// ── Challenge pre-computation ─────────────────────────────────────────────
+// Pre-compute all NPC picks for every round so that all challengers see the
+// same NPC behaviour regardless of the human player's choices.
+// Returns an array indexed by round (0-based):  [{ 1: cardId, 2: cardId, 3: cardId }, …]
+function precomputeNpcSchedule(initialPacks, rng, numRounds) {
+  // Deep-copy packs so the simulation doesn't mutate the real ones
+  const sim = initialPacks.map(p => [...p]);
+  const schedule = [];
+
+  for (let r = 0; r < numRounds; r++) {
+    const roundPicks = {};
+
+    // Ghost player at seat 0: picks best card (same algo as NPCs 1&2, no rng consumed)
+    const ghostPick = npcPick(sim[0], null, 0); // rng=null → no randomness
+    if (ghostPick) sim[0] = sim[0].filter(c => c.id !== ghostPick.id);
+
+    // Real NPCs at seats 1-3
+    for (let npc = 1; npc < NUM_PLAYERS; npc++) {
+      const pick = npcPick(sim[npc], rng, npc);
+      roundPicks[npc] = pick ? pick.id : null;
+      if (pick) sim[npc] = sim[npc].filter(c => c.id !== pick.id);
+    }
+
+    schedule.push(roundPicks);
+    // Rotate packs left: [1, 2, 3, 0]
+    const rotated = [sim[1], sim[2], sim[3], sim[0]];
+    sim[0] = rotated[0]; sim[1] = rotated[1]; sim[2] = rotated[2]; sim[3] = rotated[3];
+  }
+  return schedule;
+}
+
 // ── API helpers ─────────────────────────────────────────────────────────────
 async function saveDraft(username, draftType, picks, pickOrder, comment, combos, challengeId) {
   const res = await fetch(`${API_BASE}/api/drafts`, {
@@ -992,6 +1023,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
   // ── Challenge state ─────────────────────────────────────────────────────
   const [draftSeed, setDraftSeed] = useState(null);
   const rngRef = useRef(null);
+  const npcScheduleRef = useRef(null); // pre-computed NPC picks for challenge mode
   const [challengeMode, setChallengeMode] = useState(null); // null | { id, creatorName, ... }
   const [challengeResult, setChallengeResult] = useState(null); // comparison data after friend completes
   const [challengeUrl, setChallengeUrl] = useState(null); // URL after creating a challenge
@@ -1089,16 +1121,18 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
     : activeDraftType;
 
   const initPacks = useCallback((cardPool, useMiniPacks, rng) => {
+    let newPacks;
     if (useMiniPacks) {
-      setPacks(miniPacks.map(p => [...p]));
+      newPacks = miniPacks.map(p => [...p]);
     } else {
       const pool = rng ? seededShuffle(cardPool, rng) : shuffle(cardPool);
-      const newPacks = [];
+      newPacks = [];
       for (let p = 0; p < NUM_PLAYERS; p++) {
         newPacks.push(pool.splice(0, packSize));
       }
-      setPacks(newPacks);
     }
+    setPacks(newPacks);
+    return newPacks; // return for pre-computation
   }, [miniPacks, packSize]);
 
   const startDraft = useCallback((overrideSeed) => {
@@ -1110,7 +1144,14 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
     if (isCombo) setComboPhase(1);
     setOccPicks([]);
     setOccPickOrder([]);
-    initPacks(draftableCards, isMini, rngRef.current);
+    const newPacks = initPacks(draftableCards, isMini, rngRef.current);
+    // In challenge mode: pre-compute all NPC picks so every challenger sees
+    // the same NPC behaviour regardless of their own card choices.
+    if (overrideSeed && newPacks) {
+      npcScheduleRef.current = precomputeNpcSchedule(newPacks, rngRef.current, maxPicks);
+    } else {
+      npcScheduleRef.current = null;
+    }
     setMyPicks([]);
     setPickOrder([]);
     setRound(1);
@@ -1118,7 +1159,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
     setLastPickPopularity({});
     setUndoSnapshot(null);
     setPhase("drafting");
-  }, [canStart, isMini, isCombo, draftableCards, initPacks]);
+  }, [canStart, isMini, isCombo, draftableCards, initPacks, maxPicks]);
 
   const handleUndo = useCallback(() => {
     if (!undoSnapshot) return;
@@ -1157,9 +1198,18 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
     // Both modes: remove player's pick, NPC picks, rotate packs
     const newPacks = packs.map(pack => [...pack]);
     newPacks[0] = newPacks[0].filter(c => c.id !== card.id);
+    const schedule = npcScheduleRef.current;
+    const roundIdx = round - 1; // round is 1-based, schedule is 0-based
     for (let npc = 1; npc < NUM_PLAYERS; npc++) {
-      const pick = npcPick(newPacks[npc], rngRef.current, npc);
-      if (pick) newPacks[npc] = newPacks[npc].filter(c => c.id !== pick.id);
+      if (schedule && schedule[roundIdx] && schedule[roundIdx][npc]) {
+        // Challenge mode: use pre-computed pick (deterministic across all challengers)
+        const prePickId = schedule[roundIdx][npc];
+        newPacks[npc] = newPacks[npc].filter(c => c.id !== prePickId);
+      } else {
+        // Normal mode: compute NPC pick on the fly
+        const pick = npcPick(newPacks[npc], rngRef.current, npc);
+        if (pick) newPacks[npc] = newPacks[npc].filter(c => c.id !== pick.id);
+      }
     }
     const rotated = [newPacks[1], newPacks[2], newPacks[3], newPacks[0]];
     setPacks(rotated);
@@ -1200,6 +1250,10 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
             newMinorPacks.push(minorPool.splice(0, packSize));
           }
           setPacks(newMinorPacks);
+          // Pre-compute NPC schedule for phase 2 (challenge mode)
+          if (npcScheduleRef.current) {
+            npcScheduleRef.current = precomputeNpcSchedule(newMinorPacks, rngRef.current, maxPicks);
+          }
         }
         // Phase stays "drafting"
       } else {
@@ -1266,6 +1320,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
     setSaving(false);
     setSaveResult(null);
     setShowCommunity(false);
+    npcScheduleRef.current = null;
     setLastPickPopularity({});
     setComboPhase(1);
     setOccPicks([]);
