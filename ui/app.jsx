@@ -3,6 +3,7 @@ import * as d3 from "d3";
 import Drafter from "./drafter.jsx";
 import CommunityHands from "./hands.jsx";
 import ScoreSheet from "./scoresheet.jsx";
+import CardWiki from "./wiki.jsx";
 
 // ── API helpers ─────────────────────────────────────────────────────────────
 const API_BASE = "";  // same origin in production; Vite proxy in dev
@@ -335,9 +336,19 @@ function GraphView({ cards, onSelectCard, selectedId, onOverflow, themeE }) {
     const node = g.append("g").selectAll("g").data(nodes).join("g")
       .attr("cursor", "pointer")
       .call(d3.drag()
-        .on("start", (e, d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
-        .on("drag", (e, d) => { d.fx = e.x; d.fy = e.y; })
-        .on("end", (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; })
+        .on("start", (e, d) => { d._isDrag = false; d._startX = e.x; d._startY = e.y; })
+        .on("drag", (e, d) => {
+          const dx = e.x - d._startX, dy = e.y - d._startY;
+          if (!d._isDrag && (dx*dx + dy*dy) > 16) {
+            d._isDrag = true;
+            d.fx = d.x; d.fy = d.y;
+            if (!e.active) sim.alphaTarget(0.05).restart();
+          }
+          if (d._isDrag) { d.fx = e.x; d.fy = e.y; }
+        })
+        .on("end", (e, d) => {
+          if (d._isDrag) { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }
+        })
       )
       .on("click", (e, d) => { if (d.nodeType === "card") onSelectCard(d.id); });
 
@@ -969,7 +980,7 @@ export default function App() {
   // Auto-collapse sidebar when entering drafter/hands, expand when returning to explorer
   const setAppModeWithSidebar = useCallback((mode, opts) => {
     setAppMode(mode);
-    setSidebarCollapsed(mode === "drafter" || mode === "hands" || mode === "score");
+    setSidebarCollapsed(mode === "drafter" || mode === "hands" || mode === "score" || mode === "wiki");
     if (opts?.draftType) setHandsDraftType(opts.draftType);
   }, []);
 
@@ -1241,6 +1252,9 @@ export default function App() {
     return [...filtered].sort((a, b) => ((a[sortCol] || 0) - (b[sortCol] || 0)) * dir);
   }, [filtered, sortCol, sortDir]);
 
+  // Memoize the graph card slice so it keeps the same reference across re-renders
+  const graphCards = useMemo(() => filtered.slice(0, graphLimit), [filtered, graphLimit]);
+
   // Reset table page when filters/sort change
   useEffect(() => { setTablePage(0); }, [filtered, sortCol, sortDir]);
 
@@ -1364,6 +1378,7 @@ export default function App() {
       { mode: "drafter", emoji: "\uD83C\uDCCF", label: "Draft" },
       { mode: "hands", emoji: "\uD83E\uDD1D", label: "Hands" },
       { mode: "score", emoji: "\uD83D\uDCCB", label: "Score" },
+      { mode: "wiki", emoji: "\uD83D\uDCD6", label: "Wiki" },
     ];
     const mobileModeSwitcher = (
       <div style={{ display: "flex", gap: 3, background: E.surface, borderRadius: 8, padding: 2, border: `1px solid ${E.border}` }}>
@@ -1393,6 +1408,7 @@ export default function App() {
         { mode: "drafter", emoji: "\uD83C\uDCCF", title: "Drafter", desc: "Draft cards against 3 NPCs" },
         { mode: "hands", emoji: "\uD83E\uDD1D", title: "Community Hands", desc: "Browse drafted hands" },
         { mode: "score", emoji: "\uD83D\uDCCB", title: "Score Sheet", desc: "Calculate your game score" },
+        { mode: "wiki", emoji: "\uD83D\uDCD6", title: "Card Wiki", desc: "Combos, tips & anti-combos" },
       ];
       return (
         <div style={{
@@ -1466,10 +1482,10 @@ export default function App() {
       );
     }
 
-    if (appMode === "drafter" || appMode === "hands" || appMode === "score") {
+    if (appMode === "drafter" || appMode === "hands" || appMode === "score" || appMode === "wiki") {
       return (
         <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: E.bg, color: E.textSecondary, fontFamily: "Inter, system-ui, sans-serif" }}>
-          {/* Mobile drafter/hands/score header */}
+          {/* Mobile drafter/hands/score/wiki header */}
           <div style={{
             display: "flex", alignItems: "center", padding: "10px 12px",
             borderBottom: `1px solid ${E.border}`, gap: 8, flexShrink: 0,
@@ -1483,6 +1499,8 @@ export default function App() {
               ? <Drafter allCards={activeCards} norwayOnly={norwayOnly} setNorwayOnly={setNorwayOnly} onViewHands={(dt) => setAppModeWithSidebar("hands", { draftType: dt })} isOffline={isOffline} />
               : appMode === "hands"
               ? <CommunityHands allCards={allCards} initialDraftType={handsDraftType} />
+              : appMode === "wiki"
+              ? <CardWiki allCards={allCards} />
               : <ScoreSheet allCards={activeCards} />
             }
           </div>
@@ -1553,7 +1571,7 @@ export default function App() {
         {/* Main content */}
         <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
           {view === "graph" ? (
-            <GraphView cards={filtered.slice(0, graphLimit)} onSelectCard={handleSelectCard} selectedId={selectedId} onOverflow={() => setView("table")} themeE={E} />
+            <GraphView cards={graphCards} onSelectCard={handleSelectCard} selectedId={selectedId} onOverflow={() => setView("table")} themeE={E} />
           ) : (
             <div style={{ overflow: "auto", height: "100%", padding: "0 8px 8px" }}>
               {/* List / Gallery sub-toggle */}
@@ -1678,6 +1696,7 @@ export default function App() {
             { mode: "drafter", emoji: "\uD83C\uDCCF", label: "Drafter" },
             { mode: "hands", emoji: "\uD83E\uDD1D", label: "Hands" },
             { mode: "score", emoji: "\uD83D\uDCCB", label: "Score" },
+            { mode: "wiki", emoji: "\uD83D\uDCD6", label: "Wiki" },
           ].map(({ mode, emoji, label }) => {
             const isActive = appMode === mode;
             return (
@@ -1848,6 +1867,10 @@ export default function App() {
         <div style={{ flex: 1, overflow: "hidden" }}>
           <ScoreSheet allCards={activeCards} />
         </div>
+      ) : appMode === "wiki" ? (
+        <div style={{ flex: 1, overflow: "hidden" }}>
+          <CardWiki allCards={allCards} />
+        </div>
       ) : (
       <>
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -1935,7 +1958,7 @@ export default function App() {
         {/* Main content */}
         <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
           {view === "graph" ? (
-            <GraphView cards={filtered.slice(0, graphLimit)} onSelectCard={handleSelectCard} selectedId={selectedId} onOverflow={() => setView("table")} themeE={E} />
+            <GraphView cards={graphCards} onSelectCard={handleSelectCard} selectedId={selectedId} onOverflow={() => setView("table")} themeE={E} />
           ) : (
             <div style={{ overflow: "auto", height: "100%", padding: "0 16px 16px" }}>
               {/* List / Gallery sub-toggle */}

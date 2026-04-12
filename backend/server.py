@@ -344,6 +344,38 @@ def _get_db() -> sqlite3.Connection:
         except Exception as e:
             print(f"  [migration] skipped legacy attempt on {r['id']}: {e}")
 
+    # ── Wiki tables ──────────────────────────────────────────────────────────
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS wiki_combos (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            cardIds     TEXT NOT NULL,
+            comment     TEXT DEFAULT '',
+            submittedBy TEXT NOT NULL,
+            createdAt   TEXT NOT NULL
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_wiki_combos_cards ON wiki_combos(cardIds)")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS wiki_nobos (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            cardIds     TEXT NOT NULL,
+            comment     TEXT DEFAULT '',
+            submittedBy TEXT NOT NULL,
+            createdAt   TEXT NOT NULL
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_wiki_nobos_cards ON wiki_nobos(cardIds)")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS wiki_tips (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            cardId      TEXT NOT NULL,
+            tip         TEXT NOT NULL,
+            submittedBy TEXT NOT NULL,
+            createdAt   TEXT NOT NULL
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_wiki_tips_card ON wiki_tips(cardId)")
+
     # ── Scores table ──────────────────────────────────────────────────────────
     conn.execute("""
         CREATE TABLE IF NOT EXISTS scores (
@@ -1043,27 +1075,44 @@ def backup_data():
         d["cardLog"] = json.loads(d["cardLog"]) if d.get("cardLog") else None
         scores.append(d)
 
+    # Wiki data
+    wiki_combos = [
+        {**dict(row), "cardIds": json.loads(row["cardIds"])}
+        for row in conn.execute("SELECT * FROM wiki_combos ORDER BY createdAt DESC").fetchall()
+    ]
+    wiki_nobos = [
+        {**dict(row), "cardIds": json.loads(row["cardIds"])}
+        for row in conn.execute("SELECT * FROM wiki_nobos ORDER BY createdAt DESC").fetchall()
+    ]
+    wiki_tips = [dict(row) for row in conn.execute("SELECT * FROM wiki_tips ORDER BY createdAt DESC").fetchall()]
+
     conn.close()
 
     return {
-        "version": 1,
+        "version": 2,
         "exportedAt": datetime.datetime.utcnow().isoformat() + "Z",
         "drafts": drafts,
         "scores": scores,
+        "wikiCombos": wiki_combos,
+        "wikiNobos": wiki_nobos,
+        "wikiTips": wiki_tips,
     }
 
 
 @app.post("/api/restore")
 async def restore_data(request: Request):
-    """Import drafts and scores from a backup JSON. Skips duplicates by ID."""
+    """Import drafts, scores, and wiki data from a backup JSON. Skips duplicates by ID."""
     body = await request.json()
 
-    if body.get("version") != 1:
+    if body.get("version") not in (1, 2):
         return JSONResponse(status_code=400, content={"error": "Unknown backup format"})
 
     conn = _get_db()
     drafts_added = 0
     scores_added = 0
+    wiki_combos_added = 0
+    wiki_nobos_added = 0
+    wiki_tips_added = 0
 
     for d in body.get("drafts", []):
         existing = conn.execute("SELECT id FROM drafts WHERE id = ?", (d["id"],)).fetchone()
@@ -1092,9 +1141,47 @@ async def restore_data(request: Request):
         )
         scores_added += 1
 
+    # Wiki data (version 2+)
+    for wc in body.get("wikiCombos", []):
+        existing = conn.execute("SELECT id FROM wiki_combos WHERE id = ?", (wc["id"],)).fetchone()
+        if existing:
+            continue
+        conn.execute(
+            "INSERT INTO wiki_combos (id, cardIds, comment, submittedBy, createdAt) VALUES (?,?,?,?,?)",
+            (wc["id"], json.dumps(wc.get("cardIds", [])), wc.get("comment", ""),
+             wc.get("submittedBy", ""), wc.get("createdAt", "")),
+        )
+        wiki_combos_added += 1
+
+    for wn in body.get("wikiNobos", []):
+        existing = conn.execute("SELECT id FROM wiki_nobos WHERE id = ?", (wn["id"],)).fetchone()
+        if existing:
+            continue
+        conn.execute(
+            "INSERT INTO wiki_nobos (id, cardIds, comment, submittedBy, createdAt) VALUES (?,?,?,?,?)",
+            (wn["id"], json.dumps(wn.get("cardIds", [])), wn.get("comment", ""),
+             wn.get("submittedBy", ""), wn.get("createdAt", "")),
+        )
+        wiki_nobos_added += 1
+
+    for wt in body.get("wikiTips", []):
+        existing = conn.execute("SELECT id FROM wiki_tips WHERE id = ?", (wt["id"],)).fetchone()
+        if existing:
+            continue
+        conn.execute(
+            "INSERT INTO wiki_tips (id, cardId, tip, submittedBy, createdAt) VALUES (?,?,?,?,?)",
+            (wt["id"], wt.get("cardId", ""), wt.get("tip", ""),
+             wt.get("submittedBy", ""), wt.get("createdAt", "")),
+        )
+        wiki_tips_added += 1
+
     conn.commit()
     conn.close()
-    return {"ok": True, "draftsAdded": drafts_added, "scoresAdded": scores_added}
+    return {
+        "ok": True, "draftsAdded": drafts_added, "scoresAdded": scores_added,
+        "wikiCombosAdded": wiki_combos_added, "wikiNobosAdded": wiki_nobos_added,
+        "wikiTipsAdded": wiki_tips_added,
+    }
 
 
 # ── Card OCR via Claude Vision ────────────────────────────────────────────────
@@ -1262,6 +1349,202 @@ async def image_proxy(url: str = ""):
         return JSONResponse(status_code=e.response.status_code, content={"error": str(e)})
     except Exception as e:
         return JSONResponse(status_code=502, content={"error": str(e)})
+
+# ── Card Wiki API ─────────────────────────────────────────────────────────────
+
+_CARDS_BY_ID_WIKI: dict[str, dict] = {c["id"]: c for c in ALL_CARDS}
+
+class WikiComboRequest(BaseModel):
+    cardIds: list[str]    # 2+ card IDs
+    comment: str = ""
+    submittedBy: str
+
+class WikiTipRequest(BaseModel):
+    cardId: str
+    tip: str
+    submittedBy: str
+
+
+def _community_combos_for_card(conn, card_id: str) -> list[dict]:
+    """Fetch combos from saved hands (drafts + challenge_attempts) that mention card_id."""
+    results = []
+    seen = set()
+    for table, user_col in [("drafts", "username"), ("challenge_attempts", "challengerName")]:
+        rows = conn.execute(f"SELECT {user_col}, combos FROM {table} WHERE combos LIKE ?",
+                            (f'%{card_id}%',)).fetchall()
+        for row in rows:
+            combos = json.loads(row["combos"] or "[]")
+            for combo in combos:
+                cids = combo.get("cardIds", [])
+                if card_id in cids and len(cids) >= 2:
+                    key = tuple(sorted(cids)) + (combo.get("comment", ""),)
+                    if key not in seen:
+                        seen.add(key)
+                        results.append({
+                            "cardIds": cids,
+                            "comment": combo.get("comment", ""),
+                            "submittedBy": row[user_col],
+                            "source": "hand",
+                        })
+    return results
+
+
+@app.get("/api/wiki/cards/{card_id}")
+def wiki_card_detail(card_id: str):
+    """Full wiki page data for one card: combos, nobos, tips, hand combos."""
+    card = _CARDS_BY_ID_WIKI.get(card_id)
+    if not card:
+        return JSONResponse(status_code=404, content={"error": "Card not found"})
+    conn = _get_db()
+
+    # Community-submitted combos
+    wiki_combo_rows = conn.execute(
+        "SELECT id, cardIds, comment, submittedBy, createdAt FROM wiki_combos"
+    ).fetchall()
+    wiki_combos = []
+    for r in wiki_combo_rows:
+        cids = json.loads(r["cardIds"])
+        if card_id in cids:
+            wiki_combos.append({
+                "id": r["id"], "cardIds": cids, "comment": r["comment"],
+                "submittedBy": r["submittedBy"], "createdAt": r["createdAt"],
+                "source": "wiki",
+            })
+
+    # Combos from saved hands
+    hand_combos = _community_combos_for_card(conn, card_id)
+
+    # Anti-combos (nobos)
+    nobo_rows = conn.execute(
+        "SELECT id, cardIds, comment, submittedBy, createdAt FROM wiki_nobos"
+    ).fetchall()
+    nobos = []
+    for r in nobo_rows:
+        cids = json.loads(r["cardIds"])
+        if card_id in cids:
+            nobos.append({
+                "id": r["id"], "cardIds": cids, "comment": r["comment"],
+                "submittedBy": r["submittedBy"], "createdAt": r["createdAt"],
+            })
+
+    # Tips
+    tips = [
+        {"id": r["id"], "tip": r["tip"], "submittedBy": r["submittedBy"], "createdAt": r["createdAt"]}
+        for r in conn.execute(
+            "SELECT id, tip, submittedBy, createdAt FROM wiki_tips WHERE cardId = ? ORDER BY createdAt DESC",
+            (card_id,)
+        ).fetchall()
+    ]
+
+    conn.close()
+    return {
+        "card": card,
+        "wikiCombos": wiki_combos,
+        "handCombos": hand_combos,
+        "nobos": nobos,
+        "tips": tips,
+    }
+
+
+@app.post("/api/wiki/combos")
+def create_wiki_combo(req: WikiComboRequest):
+    if not req.submittedBy.strip():
+        return JSONResponse(status_code=400, content={"error": "username required"})
+    if len(req.cardIds) < 2:
+        return JSONResponse(status_code=400, content={"error": "combo needs at least 2 cards"})
+    # Validate card IDs exist
+    for cid in req.cardIds:
+        if cid not in _CARDS_BY_ID_WIKI:
+            return JSONResponse(status_code=400, content={"error": f"unknown card: {cid}"})
+    conn = _get_db()
+    ts = datetime.datetime.utcnow().isoformat() + "Z"
+    conn.execute(
+        "INSERT INTO wiki_combos (cardIds, comment, submittedBy, createdAt) VALUES (?,?,?,?)",
+        (json.dumps(sorted(req.cardIds)), (req.comment or "").strip()[:300], req.submittedBy.strip(), ts)
+    )
+    conn.commit()
+    combo_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    conn.close()
+    return {"ok": True, "id": combo_id}
+
+
+@app.post("/api/wiki/nobos")
+def create_wiki_nobo(req: WikiComboRequest):
+    if not req.submittedBy.strip():
+        return JSONResponse(status_code=400, content={"error": "username required"})
+    if len(req.cardIds) < 2:
+        return JSONResponse(status_code=400, content={"error": "nobo needs at least 2 cards"})
+    for cid in req.cardIds:
+        if cid not in _CARDS_BY_ID_WIKI:
+            return JSONResponse(status_code=400, content={"error": f"unknown card: {cid}"})
+    conn = _get_db()
+    ts = datetime.datetime.utcnow().isoformat() + "Z"
+    conn.execute(
+        "INSERT INTO wiki_nobos (cardIds, comment, submittedBy, createdAt) VALUES (?,?,?,?)",
+        (json.dumps(sorted(req.cardIds)), (req.comment or "").strip()[:300], req.submittedBy.strip(), ts)
+    )
+    conn.commit()
+    nobo_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    conn.close()
+    return {"ok": True, "id": nobo_id}
+
+
+@app.post("/api/wiki/tips")
+def create_wiki_tip(req: WikiTipRequest):
+    if not req.submittedBy.strip():
+        return JSONResponse(status_code=400, content={"error": "username required"})
+    if not req.tip.strip():
+        return JSONResponse(status_code=400, content={"error": "tip text required"})
+    if req.cardId not in _CARDS_BY_ID_WIKI:
+        return JSONResponse(status_code=400, content={"error": "unknown card"})
+    conn = _get_db()
+    ts = datetime.datetime.utcnow().isoformat() + "Z"
+    conn.execute(
+        "INSERT INTO wiki_tips (cardId, tip, submittedBy, createdAt) VALUES (?,?,?,?)",
+        (req.cardId, req.tip.strip()[:1000], req.submittedBy.strip(), ts)
+    )
+    conn.commit()
+    tip_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    conn.close()
+    return {"ok": True, "id": tip_id}
+
+
+@app.get("/api/wiki/stats")
+def wiki_stats():
+    """Return combo/nobo/tip counts per card for the wiki list view."""
+    conn = _get_db()
+    # Count wiki combos per card
+    combo_counts: dict[str, int] = {}
+    for row in conn.execute("SELECT cardIds FROM wiki_combos").fetchall():
+        for cid in json.loads(row["cardIds"]):
+            combo_counts[cid] = combo_counts.get(cid, 0) + 1
+    # Count hand combos per card
+    hand_combo_counts: dict[str, int] = {}
+    for table in ["drafts", "challenge_attempts"]:
+        for row in conn.execute(f"SELECT combos FROM {table} WHERE combos != '[]'").fetchall():
+            seen_in_row = set()
+            for combo in json.loads(row["combos"] or "[]"):
+                for cid in combo.get("cardIds", []):
+                    if cid not in seen_in_row:
+                        seen_in_row.add(cid)
+                        hand_combo_counts[cid] = hand_combo_counts.get(cid, 0) + 1
+    # Count nobos per card
+    nobo_counts: dict[str, int] = {}
+    for row in conn.execute("SELECT cardIds FROM wiki_nobos").fetchall():
+        for cid in json.loads(row["cardIds"]):
+            nobo_counts[cid] = nobo_counts.get(cid, 0) + 1
+    # Count tips per card
+    tip_counts: dict[str, int] = {}
+    for row in conn.execute("SELECT cardId, COUNT(*) as cnt FROM wiki_tips GROUP BY cardId").fetchall():
+        tip_counts[row["cardId"]] = row["cnt"]
+    conn.close()
+    return {
+        "comboCounts": combo_counts,
+        "handComboCounts": hand_combo_counts,
+        "noboCounts": nobo_counts,
+        "tipCounts": tip_counts,
+    }
+
 
 # ── Linked Data: dereferenceable IRIs ────────────────────────────────────────
 
