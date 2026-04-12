@@ -27,8 +27,13 @@ function cardImgSrc(c) {
 
 // ── Card Wiki ──────────────────────────────────────────────────────────────
 
-export default function CardWiki({ allCards }) {
-  const [selectedCardId, setSelectedCardId] = useState(null);
+export default function CardWiki({ allCards, initialCardId }) {
+  const [selectedCardId, setSelectedCardId] = useState(initialCardId || null);
+
+  // When navigating from Explorer with a new card, update selection
+  useEffect(() => {
+    if (initialCardId) setSelectedCardId(initialCardId);
+  }, [initialCardId]);
   const [search, setSearch] = useState("");
   const [deckFilter, setDeckFilter] = useState("");
   const [typeFilter, setTypeFilter] = useState("");

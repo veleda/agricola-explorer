@@ -91,31 +91,30 @@ function npcPickReset() { /* no state to reset now, kept for API stability */ }
 // Pre-compute all NPC picks for every round so that all challengers see the
 // same NPC behaviour regardless of the human player's choices.
 // Returns an array indexed by round (0-based):  [{ 1: cardId, 2: cardId, 3: cardId }, …]
-function precomputeNpcSchedule(initialPacks, rng, numRounds) {
-  // Deep-copy packs so the simulation doesn't mutate the real ones
-  const sim = initialPacks.map(p => [...p]);
-  const schedule = [];
-
-  for (let r = 0; r < numRounds; r++) {
-    const roundPicks = {};
-
-    // Ghost player at seat 0: picks best card (same algo as NPCs 1&2, no rng consumed)
-    const ghostPick = npcPick(sim[0], null, 0); // rng=null → no randomness
-    if (ghostPick) sim[0] = sim[0].filter(c => c.id !== ghostPick.id);
-
-    // Real NPCs at seats 1-3
-    for (let npc = 1; npc < NUM_PLAYERS; npc++) {
-      const pick = npcPick(sim[npc], rng, npc);
-      roundPicks[npc] = pick ? pick.id : null;
-      if (pick) sim[npc] = sim[npc].filter(c => c.id !== pick.id);
+function precomputeNpcSchedule(initialPacks) {
+  // Only pre-compute round 1 NPC picks. In round 1, each NPC picks from their
+  // own initial pack (no rotation has happened yet), so the picks are identical
+  // for all challengers regardless of what the player chooses.
+  // From round 2 onwards, packs have rotated and the player's actual pick
+  // affects what NPCs see, so we let NPCs pick live.
+  const roundPicks = {};
+  for (let npc = 1; npc < NUM_PLAYERS; npc++) {
+    // Use deterministic pick (best ADP) — no RNG needed for round 1
+    // NPCs 1&2 always pick best ADP, NPC 3 is 90/10 but for the pre-computed
+    // round we use deterministic (best ADP) so all challengers see the same thing
+    const pack = initialPacks[npc];
+    const withAdp = pack.filter(c => c.adp > 0);
+    let pick;
+    if (withAdp.length > 0) {
+      withAdp.sort((a, b) => a.adp - b.adp);
+      pick = withAdp[0];
+    } else {
+      const sorted = [...pack].sort((a, b) => (b.winRatio || 0) - (a.winRatio || 0));
+      pick = sorted[0];
     }
-
-    schedule.push(roundPicks);
-    // Rotate packs left: [1, 2, 3, 0]
-    const rotated = [sim[1], sim[2], sim[3], sim[0]];
-    sim[0] = rotated[0]; sim[1] = rotated[1]; sim[2] = rotated[2]; sim[3] = rotated[3];
+    roundPicks[npc] = pick ? pick.id : null;
   }
-  return schedule;
+  return [roundPicks]; // Array with single round
 }
 
 // ── Offline cache helpers ──────────────────────────────────────────────────
@@ -1234,7 +1233,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
     // In challenge mode: pre-compute all NPC picks so every challenger sees
     // the same NPC behaviour regardless of their own card choices.
     if (overrideSeed && newPacks) {
-      npcScheduleRef.current = precomputeNpcSchedule(newPacks, rngRef.current, maxPicks);
+      npcScheduleRef.current = precomputeNpcSchedule(newPacks);
     } else {
       npcScheduleRef.current = null;
     }
@@ -1287,12 +1286,14 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
     const schedule = npcScheduleRef.current;
     const roundIdx = round - 1; // round is 1-based, schedule is 0-based
     for (let npc = 1; npc < NUM_PLAYERS; npc++) {
-      if (schedule && schedule[roundIdx] && schedule[roundIdx][npc]) {
-        // Challenge mode: use pre-computed pick (deterministic across all challengers)
-        const prePickId = schedule[roundIdx][npc];
+      if (schedule && roundIdx === 0 && schedule[0] && schedule[0][npc]) {
+        // Challenge mode, round 1 only: use pre-computed pick so all challengers
+        // see the same first-round NPC behavior. From round 2+, NPCs pick live
+        // based on the actual pack state (which depends on the player's picks).
+        const prePickId = schedule[0][npc];
         newPacks[npc] = newPacks[npc].filter(c => c.id !== prePickId);
       } else {
-        // Normal mode: compute NPC pick on the fly
+        // Normal mode or challenge round 2+: compute NPC pick on the fly
         const pick = npcPick(newPacks[npc], rngRef.current, npc);
         if (pick) newPacks[npc] = newPacks[npc].filter(c => c.id !== pick.id);
       }
@@ -1336,9 +1337,9 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
             newMinorPacks.push(minorPool.splice(0, packSize));
           }
           setPacks(newMinorPacks);
-          // Pre-compute NPC schedule for phase 2 (challenge mode)
+          // Pre-compute round 1 NPC schedule for phase 2 (challenge mode)
           if (npcScheduleRef.current) {
-            npcScheduleRef.current = precomputeNpcSchedule(newMinorPacks, rngRef.current, maxPicks);
+            npcScheduleRef.current = precomputeNpcSchedule(newMinorPacks);
           }
         }
         // Phase stays "drafting"

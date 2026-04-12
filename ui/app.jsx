@@ -688,7 +688,7 @@ function GalleryView({ cards, onSelectCard, selectedId, themeE }) {
   );
 }
 
-function CardDetail({ card, onClose, onFilterGain, onFilterAffect, onFilterPrereq, onSelectCardByName, themeE }) {
+function CardDetail({ card, onClose, onFilterGain, onFilterAffect, onFilterPrereq, onSelectCardByName, onViewInWiki, themeE }) {
   if (!card) return (
     <div style={{ padding: 24, color: themeE.textDim, fontSize: 13, textAlign: "center" }}>
       Click a card node or table row to inspect it.
@@ -818,6 +818,20 @@ function CardDetail({ card, onClose, onFilterGain, onFilterAffect, onFilterPrere
                 onClick={() => onSelectCardByName && onSelectCardByName(combo.id)} />
             ))}
           </div>
+        </div>
+      )}
+
+      {onViewInWiki && (
+        <div style={{ marginTop: 14, paddingTop: 10, borderTop: `1px solid ${themeE.border}` }}>
+          <button onClick={() => onViewInWiki(card.id)}
+            style={{
+              width: "100%", padding: "8px 12px", borderRadius: 6,
+              border: `1px solid ${themeE.accent}`, background: themeE.accent + "12",
+              color: themeE.accent, fontSize: 12, fontWeight: 600,
+              cursor: "pointer", transition: "all 0.15s",
+            }}>
+            {"\uD83D\uDCD6"} View in Card Wiki
+          </button>
         </div>
       )}
     </div>
@@ -972,6 +986,7 @@ export default function App() {
   const [appMode, setAppMode] = useState(initialMode);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialMode === "drafter");
   const [handsDraftType, setHandsDraftType] = useState(null); // for linking from drafter
+  const [wikiCardId, setWikiCardId] = useState(null); // for linking to wiki from explorer
   const [explorerTheme, setExplorerTheme] = useState("light");
   const [backupOpen, setBackupOpen] = useState(false);
   const [backupMsg, setBackupMsg] = useState(null); // {text, type}
@@ -982,6 +997,8 @@ export default function App() {
     setAppMode(mode);
     setSidebarCollapsed(mode === "drafter" || mode === "hands" || mode === "score" || mode === "wiki");
     if (opts?.draftType) setHandsDraftType(opts.draftType);
+    if (opts?.wikiCardId) setWikiCardId(opts.wikiCardId);
+    else if (mode === "wiki" && !opts?.wikiCardId) setWikiCardId(null);
   }, []);
 
   // ── Backup / Restore handlers ─────────────────────────────────────────
@@ -1500,7 +1517,7 @@ export default function App() {
               : appMode === "hands"
               ? <CommunityHands allCards={allCards} initialDraftType={handsDraftType} />
               : appMode === "wiki"
-              ? <CardWiki allCards={allCards} />
+              ? <CardWiki allCards={allCards} initialCardId={wikiCardId} />
               : <ScoreSheet allCards={activeCards} />
             }
           </div>
@@ -1672,7 +1689,8 @@ export default function App() {
           </div>
           <CardDetail card={selected} onClose={() => setShowInspector(false)}
             onFilterGain={handleFilterGain} onFilterAffect={handleFilterAffect}
-            onFilterPrereq={handleFilterPrereq} onSelectCardByName={handleSelectCardByName} themeE={E} />
+            onFilterPrereq={handleFilterPrereq} onSelectCardByName={handleSelectCardByName}
+            onViewInWiki={(id) => setAppModeWithSidebar("wiki", { wikiCardId: id })} themeE={E} />
         </Drawer>
       </div>
     );
@@ -1869,7 +1887,7 @@ export default function App() {
         </div>
       ) : appMode === "wiki" ? (
         <div style={{ flex: 1, overflow: "hidden" }}>
-          <CardWiki allCards={allCards} />
+          <CardWiki allCards={allCards} initialCardId={wikiCardId} />
         </div>
       ) : (
       <>
@@ -2074,6 +2092,7 @@ export default function App() {
             onFilterAffect={handleFilterAffect}
             onFilterPrereq={handleFilterPrereq}
             onSelectCardByName={handleSelectCardByName}
+            onViewInWiki={(id) => setAppModeWithSidebar("wiki", { wikiCardId: id })}
             themeE={E} />
         </div>
       </div>
