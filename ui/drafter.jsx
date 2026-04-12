@@ -118,6 +118,64 @@ function precomputeNpcSchedule(initialPacks, rng, numRounds) {
   return schedule;
 }
 
+// ── Offline cache helpers ──────────────────────────────────────────────────
+const OFFLINE_CARDS_KEY = "agricola_offline_cards";
+const OFFLINE_META_KEY  = "agricola_offline_meta";
+const OFFLINE_TS_KEY    = "agricola_offline_ts";
+const OFFLINE_IMG_CACHE = "agricola-card-images";
+
+async function prepareOfflineCache(allCards, progressCb) {
+  // 1. Cache card data + meta in localStorage
+  progressCb?.("Saving card data...");
+  try {
+    localStorage.setItem(OFFLINE_CARDS_KEY, JSON.stringify(allCards));
+    // Fetch and cache meta too
+    const metaRes = await fetch(`${API_BASE}/api/meta`);
+    const meta = await metaRes.json();
+    localStorage.setItem(OFFLINE_META_KEY, JSON.stringify(meta));
+    localStorage.setItem(OFFLINE_TS_KEY, new Date().toISOString());
+  } catch (e) {
+    throw new Error("Failed to cache card data: " + e.message);
+  }
+
+  // 2. Pre-cache card images using Cache API
+  const imageUrls = allCards
+    .map(c => cardImgSrc(c))
+    .filter(Boolean);
+  const uniqueUrls = [...new Set(imageUrls)];
+  const total = uniqueUrls.length;
+
+  if (total === 0) {
+    progressCb?.("Done! No images to cache.");
+    return { cards: allCards.length, images: 0 };
+  }
+
+  progressCb?.(`Caching ${total} card images...`);
+  let cached = 0;
+  let failed = 0;
+
+  try {
+    const cache = await caches.open(OFFLINE_IMG_CACHE);
+    // Process in batches of 10 to avoid hammering the server
+    for (let i = 0; i < uniqueUrls.length; i += 10) {
+      const batch = uniqueUrls.slice(i, i + 10);
+      const results = await Promise.allSettled(
+        batch.map(url => cache.add(url).then(() => { cached++; }).catch(() => { failed++; }))
+      );
+      progressCb?.(`Caching images... ${cached + failed}/${total}`);
+    }
+  } catch (e) {
+    console.warn("Cache API not available, images won't work offline:", e);
+  }
+
+  progressCb?.("Done!");
+  return { cards: allCards.length, images: cached, failed };
+}
+
+function getOfflineTimestamp() {
+  try { return localStorage.getItem(OFFLINE_TS_KEY); } catch { return null; }
+}
+
 // ── API helpers ─────────────────────────────────────────────────────────────
 async function saveDraft(username, draftType, picks, pickOrder, comment, combos, challengeId) {
   const res = await fetch(`${API_BASE}/api/drafts`, {
@@ -283,7 +341,7 @@ function DraftCard({ card, onPick, disabled, hideStats, pickPopularity }) {
 }
 
 // ── Draft results screen ────────────────────────────────────────────────────
-function DraftResults({ picks, allCards, draftType, saveDraftType, username, onSave, onNewDraft, saved, saving, isMini, saveResult, onViewHands, occPicks, minorPicks, isCombo, onCreateChallenge, challengeUrl, challengeCreating, challengeError }) {
+function DraftResults({ picks, allCards, draftType, saveDraftType, username, onSave, onNewDraft, saved, saving, isMini, saveResult, onViewHands, occPicks, minorPicks, isCombo, onCreateChallenge, challengeUrl, challengeCreating, challengeError, isOffline }) {
   // For combo drafts, show the full combined hand; for single, just picks
   const allPickIds = isCombo ? [...(occPicks || []), ...(minorPicks || [])] : picks;
   const pickCards = allPickIds.map(id => allCards.find(c => c.id === id)).filter(Boolean);
@@ -570,21 +628,30 @@ function DraftResults({ picks, allCards, draftType, saveDraftType, username, onS
           />
         )}
 
+        {isOffline && (
+          <div style={{
+            marginBottom: 12, padding: "8px 14px", borderRadius: 8,
+            background: "#fef3c7", border: "1px solid #f59e0b44",
+            fontSize: 12, color: "#92400e", fontWeight: 600, textAlign: "center",
+          }}>
+            You're offline — saving and challenges are disabled
+          </div>
+        )}
         <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
           {!saved ? (
             <>
-              <button onClick={() => onSave(combos)} disabled={saving || challengeCreating}
+              <button onClick={() => onSave(combos)} disabled={saving || challengeCreating || isOffline}
                 style={{
                   padding: "10px 24px", borderRadius: 8, border: "none",
-                  background: saving ? T.textMuted : T.accent, color: "#fff",
+                  background: (saving || isOffline) ? T.textMuted : T.accent, color: "#fff",
                   fontSize: 14, fontWeight: 700,
-                  cursor: saving ? "not-allowed" : "pointer",
-                  opacity: saving ? 0.7 : 1,
+                  cursor: (saving || isOffline) ? "not-allowed" : "pointer",
+                  opacity: (saving || isOffline) ? 0.5 : 1,
                   transition: "all 0.15s",
                 }}>
                 {saving ? "Saving..." : "Save to Community"}
               </button>
-              {onCreateChallenge && !challengeUrl && (
+              {onCreateChallenge && !challengeUrl && !isOffline && (
                 <button onClick={() => onCreateChallenge(combos)} disabled={challengeCreating || saving}
                   style={{
                     padding: "10px 24px", borderRadius: 8, border: "none",
@@ -628,7 +695,7 @@ function DraftResults({ picks, allCards, draftType, saveDraftType, username, onS
             }}>
             New Draft
           </button>
-          {onViewHands && (
+          {onViewHands && !isOffline && (
             <button onClick={() => onViewHands(saveDraftType)}
               style={{
                 padding: "10px 24px", borderRadius: 8,
@@ -639,7 +706,7 @@ function DraftResults({ picks, allCards, draftType, saveDraftType, username, onS
             </button>
           )}
           {/* Challenge button also after saved (if not yet created) */}
-          {saved && onCreateChallenge && !challengeUrl && (
+          {saved && onCreateChallenge && !challengeUrl && !isOffline && (
             <button onClick={() => onCreateChallenge(combos)} disabled={challengeCreating}
               style={{
                 padding: "10px 24px", borderRadius: 8, border: "none",
@@ -987,7 +1054,26 @@ function CommunityStats({ allCards, draftType }) {
 
 
 // ── Main Drafter Component ──────────────────────────────────────────────────
-export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHands }) {
+export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHands, isOffline }) {
+  const [offlineStatus, setOfflineStatus] = useState(null); // null | "preparing" | "done" | "error"
+  const [offlineProgress, setOfflineProgress] = useState("");
+  const [offlineResult, setOfflineResult] = useState(null);
+
+  const offlineTs = useMemo(() => getOfflineTimestamp(), []);
+
+  const handlePrepareOffline = useCallback(async () => {
+    setOfflineStatus("preparing");
+    setOfflineProgress("Starting...");
+    try {
+      const result = await prepareOfflineCache(allCards, setOfflineProgress);
+      setOfflineResult(result);
+      setOfflineStatus("done");
+    } catch (err) {
+      setOfflineProgress(err.message);
+      setOfflineStatus("error");
+    }
+  }, [allCards]);
+
   const [drafterMode, setDrafterMode] = useState(null); // null | "full" | "mini" | "fullCombo" | "miniCombo"
   const [phase, setPhase] = useState("setup");
   const [draftType, setDraftType] = useState("Occupation");
@@ -1439,6 +1525,70 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
                   <div style={{ fontSize: 10, color: T.textMuted, lineHeight: 1.4 }}>{detail}</div>
                 </button>
               ))}
+            </div>
+
+            {/* Offline mode section */}
+            <div style={{
+              marginTop: 32, maxWidth: 500, margin: "32px auto 0",
+              padding: "16px 20px", borderRadius: 12,
+              background: T.surface, border: `1px solid ${T.border}`,
+            }}>
+              {isOffline && (
+                <div style={{
+                  marginBottom: 12, padding: "6px 12px", borderRadius: 8,
+                  background: "#fef3c7", border: "1px solid #f59e0b44",
+                  fontSize: 12, color: "#92400e", fontWeight: 600, textAlign: "center",
+                }}>
+                  You're offline — drafting from cached data
+                </div>
+              )}
+              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                <div style={{ flex: 1, minWidth: 180 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: T.text }}>
+                    Play Offline
+                  </div>
+                  <div style={{ fontSize: 11, color: T.textMuted, marginTop: 2 }}>
+                    {offlineTs
+                      ? `Cached ${new Date(offlineTs).toLocaleDateString()} — ready for offline play`
+                      : "Download cards and images to draft without internet"}
+                  </div>
+                </div>
+                <button
+                  onClick={handlePrepareOffline}
+                  disabled={offlineStatus === "preparing" || isOffline}
+                  style={{
+                    padding: "8px 16px", borderRadius: 8, border: "none",
+                    background: offlineStatus === "done" ? T.green
+                      : offlineStatus === "error" ? T.red
+                      : offlineStatus === "preparing" ? T.textMuted
+                      : T.blue,
+                    color: "#fff", fontSize: 12, fontWeight: 700,
+                    cursor: offlineStatus === "preparing" || isOffline ? "default" : "pointer",
+                    opacity: isOffline ? 0.5 : 1,
+                    transition: "background 0.2s",
+                    whiteSpace: "nowrap",
+                  }}>
+                  {offlineStatus === "preparing" ? "Preparing..."
+                    : offlineStatus === "done" ? "Ready!"
+                    : offlineStatus === "error" ? "Failed"
+                    : offlineTs ? "Update Cache" : "Prepare for Offline"}
+                </button>
+              </div>
+              {offlineStatus === "preparing" && (
+                <div style={{ marginTop: 8, fontSize: 11, color: T.textSecondary }}>
+                  {offlineProgress}
+                </div>
+              )}
+              {offlineStatus === "done" && offlineResult && (
+                <div style={{ marginTop: 8, fontSize: 11, color: T.green }}>
+                  Cached {offlineResult.cards} cards, {offlineResult.images} images{offlineResult.failed > 0 ? ` (${offlineResult.failed} failed)` : ""}
+                </div>
+              )}
+              {offlineStatus === "error" && (
+                <div style={{ marginTop: 8, fontSize: 11, color: T.red }}>
+                  {offlineProgress}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -1944,6 +2094,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
           challengeUrl={challengeUrl}
           challengeCreating={challengeCreating}
           challengeError={challengeError}
+          isOffline={isOffline}
         />
 
         {/* Challenge comparison (shown after challenger saves) */}

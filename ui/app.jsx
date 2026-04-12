@@ -7,6 +7,10 @@ import ScoreSheet from "./scoresheet.jsx";
 // ── API helpers ─────────────────────────────────────────────────────────────
 const API_BASE = "";  // same origin in production; Vite proxy in dev
 
+const OFFLINE_CARDS_KEY = "agricola_offline_cards";
+const OFFLINE_META_KEY  = "agricola_offline_meta";
+const OFFLINE_TS_KEY    = "agricola_offline_ts";
+
 async function fetchCards() {
   const res = await fetch(`${API_BASE}/api/cards`);
   return res.json();
@@ -15,6 +19,22 @@ async function fetchCards() {
 async function fetchMeta() {
   const res = await fetch(`${API_BASE}/api/meta`);
   return res.json();
+}
+
+function loadOfflineCards() {
+  try {
+    const raw = localStorage.getItem(OFFLINE_CARDS_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+function loadOfflineMeta() {
+  try {
+    const raw = localStorage.getItem(OFFLINE_META_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+function getOfflineTimestamp() {
+  try { return localStorage.getItem(OFFLINE_TS_KEY); } catch { return null; }
 }
 
 async function runSparql(query) {
@@ -1119,7 +1139,16 @@ export default function App() {
     if (isMobile) setShowInspector(true);
   }, [isMobile]);
 
-  // ── Load data from backend on mount ────────────────────────────────────
+  // ── Load data from backend on mount (fallback to offline cache) ────────
+  const [isOffline, setIsOffline] = useState(!navigator.onLine);
+  useEffect(() => {
+    const goOnline  = () => setIsOffline(false);
+    const goOffline = () => setIsOffline(true);
+    window.addEventListener("online",  goOnline);
+    window.addEventListener("offline", goOffline);
+    return () => { window.removeEventListener("online", goOnline); window.removeEventListener("offline", goOffline); };
+  }, []);
+
   useEffect(() => {
     Promise.all([fetchCards(), fetchMeta()])
       .then(([cards, meta]) => {
@@ -1128,7 +1157,14 @@ export default function App() {
         setLoading(false);
       })
       .catch(err => {
-        console.error("Failed to load data:", err);
+        console.error("Failed to load data from API, trying offline cache:", err);
+        const cachedCards = loadOfflineCards();
+        const cachedMeta  = loadOfflineMeta();
+        if (cachedCards && cachedMeta) {
+          setAllCards(cachedCards);
+          setMeta(cachedMeta);
+          setIsOffline(true);
+        }
         setLoading(false);
       });
   }, []);
@@ -1444,7 +1480,7 @@ export default function App() {
           </div>
           <div style={{ flex: 1, overflow: "hidden" }}>
             {appMode === "drafter"
-              ? <Drafter allCards={activeCards} norwayOnly={norwayOnly} setNorwayOnly={setNorwayOnly} onViewHands={(dt) => setAppModeWithSidebar("hands", { draftType: dt })} />
+              ? <Drafter allCards={activeCards} norwayOnly={norwayOnly} setNorwayOnly={setNorwayOnly} onViewHands={(dt) => setAppModeWithSidebar("hands", { draftType: dt })} isOffline={isOffline} />
               : appMode === "hands"
               ? <CommunityHands allCards={allCards} initialDraftType={handsDraftType} />
               : <ScoreSheet allCards={activeCards} />
@@ -1802,7 +1838,7 @@ export default function App() {
       {/* ── Centre: Drafter / Hands / Explorer ── */}
       {appMode === "drafter" ? (
         <div style={{ flex: 1, overflow: "hidden" }}>
-          <Drafter allCards={activeCards} norwayOnly={norwayOnly} setNorwayOnly={setNorwayOnly} onViewHands={(dt) => setAppModeWithSidebar("hands", { draftType: dt })} />
+          <Drafter allCards={activeCards} norwayOnly={norwayOnly} setNorwayOnly={setNorwayOnly} onViewHands={(dt) => setAppModeWithSidebar("hands", { draftType: dt })} isOffline={isOffline} />
         </div>
       ) : appMode === "hands" ? (
         <div style={{ flex: 1, overflow: "hidden" }}>
