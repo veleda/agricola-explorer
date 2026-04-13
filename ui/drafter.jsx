@@ -87,34 +87,19 @@ function npcPick(cards, rng, npcIndex) {
 }
 function npcPickReset() { /* no state to reset now, kept for API stability */ }
 
-// ── Challenge pre-computation ─────────────────────────────────────────────
-// Pre-compute all NPC picks for every round so that all challengers see the
-// same NPC behaviour regardless of the human player's choices.
-// Returns an array indexed by round (0-based):  [{ 1: cardId, 2: cardId, 3: cardId }, …]
-function precomputeNpcSchedule(initialPacks) {
-  // Only pre-compute round 1 NPC picks. In round 1, each NPC picks from their
-  // own initial pack (no rotation has happened yet), so the picks are identical
-  // for all challengers regardless of what the player chooses.
-  // From round 2 onwards, packs have rotated and the player's actual pick
-  // affects what NPCs see, so we let NPCs pick live.
-  const roundPicks = {};
-  for (let npc = 1; npc < NUM_PLAYERS; npc++) {
-    // Use deterministic pick (best ADP) — no RNG needed for round 1
-    // NPCs 1&2 always pick best ADP, NPC 3 is 90/10 but for the pre-computed
-    // round we use deterministic (best ADP) so all challengers see the same thing
-    const pack = initialPacks[npc];
-    const withAdp = pack.filter(c => c.adp > 0);
-    let pick;
-    if (withAdp.length > 0) {
-      withAdp.sort((a, b) => a.adp - b.adp);
-      pick = withAdp[0];
-    } else {
-      const sorted = [...pack].sort((a, b) => (b.winRatio || 0) - (a.winRatio || 0));
-      pick = sorted[0];
-    }
-    roundPicks[npc] = pick ? pick.id : null;
+// ── Deterministic NPC pick (challenge mode) ──────────────────────────────
+// In challenge mode, NPCs always pick the single best card: lowest ADP,
+// or highest winRatio as fallback.  No RNG, no pre-computation needed.
+// Given the same pack contents, every challenger sees the same NPC choice.
+function deterministicBestPick(cards) {
+  if (cards.length === 0) return null;
+  const withAdp = cards.filter(c => c.adp > 0);
+  if (withAdp.length > 0) {
+    withAdp.sort((a, b) => a.adp - b.adp);
+    return withAdp[0];
   }
-  return [roundPicks]; // Array with single round
+  const sorted = [...cards].sort((a, b) => (b.winRatio || 0) - (a.winRatio || 0));
+  return sorted[0];
 }
 
 // ── Offline cache helpers ──────────────────────────────────────────────────
@@ -1108,7 +1093,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
   // ── Challenge state ─────────────────────────────────────────────────────
   const [draftSeed, setDraftSeed] = useState(null);
   const rngRef = useRef(null);
-  const npcScheduleRef = useRef(null); // pre-computed NPC picks for challenge mode
+  const isChallengeRef = useRef(false); // true when running a challenge draft
   const [challengeMode, setChallengeMode] = useState(null); // null | { id, creatorName, ... }
   const [challengeResult, setChallengeResult] = useState(null); // comparison data after friend completes
   const [challengeUrl, setChallengeUrl] = useState(null); // URL after creating a challenge
@@ -1230,13 +1215,8 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
     setOccPicks([]);
     setOccPickOrder([]);
     const newPacks = initPacks(draftableCards, isMini, rngRef.current);
-    // In challenge mode: pre-compute all NPC picks so every challenger sees
-    // the same NPC behaviour regardless of their own card choices.
-    if (overrideSeed && newPacks) {
-      npcScheduleRef.current = precomputeNpcSchedule(newPacks);
-    } else {
-      npcScheduleRef.current = null;
-    }
+    // In challenge mode: NPCs pick deterministically (no RNG).
+    isChallengeRef.current = !!overrideSeed;
     setMyPicks([]);
     setPickOrder([]);
     setRound(1);
@@ -1283,17 +1263,16 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
     // Both modes: remove player's pick, NPC picks, rotate packs
     const newPacks = packs.map(pack => [...pack]);
     newPacks[0] = newPacks[0].filter(c => c.id !== card.id);
-    const schedule = npcScheduleRef.current;
-    const roundIdx = round - 1; // round is 1-based, schedule is 0-based
+    const isChallenge = isChallengeRef.current;
     for (let npc = 1; npc < NUM_PLAYERS; npc++) {
-      if (schedule && roundIdx === 0 && schedule[0] && schedule[0][npc]) {
-        // Challenge mode, round 1 only: use pre-computed pick so all challengers
-        // see the same first-round NPC behavior. From round 2+, NPCs pick live
-        // based on the actual pack state (which depends on the player's picks).
-        const prePickId = schedule[0][npc];
-        newPacks[npc] = newPacks[npc].filter(c => c.id !== prePickId);
+      if (isChallenge) {
+        // Challenge mode: always pick deterministically (lowest ADP).
+        // No RNG, no pre-computation — pure function of pack contents.
+        // Same pack = same NPC choice for every challenger.
+        const pick = deterministicBestPick(newPacks[npc]);
+        if (pick) newPacks[npc] = newPacks[npc].filter(c => c.id !== pick.id);
       } else {
-        // Normal mode or challenge round 2+: compute NPC pick on the fly
+        // Normal mode: NPC personality with optional randomness
         const pick = npcPick(newPacks[npc], rngRef.current, npc);
         if (pick) newPacks[npc] = newPacks[npc].filter(c => c.id !== pick.id);
       }
@@ -1337,10 +1316,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
             newMinorPacks.push(minorPool.splice(0, packSize));
           }
           setPacks(newMinorPacks);
-          // Pre-compute round 1 NPC schedule for phase 2 (challenge mode)
-          if (npcScheduleRef.current) {
-            npcScheduleRef.current = precomputeNpcSchedule(newMinorPacks);
-          }
+          // Challenge flag carries over to phase 2 automatically
         }
         // Phase stays "drafting"
       } else {
@@ -1407,7 +1383,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
     setSaving(false);
     setSaveResult(null);
     setShowCommunity(false);
-    npcScheduleRef.current = null;
+    isChallengeRef.current = false;
     setLastPickPopularity({});
     setComboPhase(1);
     setOccPicks([]);

@@ -4,6 +4,7 @@ import Drafter from "./drafter.jsx";
 import CommunityHands from "./hands.jsx";
 import ScoreSheet from "./scoresheet.jsx";
 import CardWiki from "./wiki.jsx";
+import LiveGame from "./livegame.jsx";
 
 // ── API helpers ─────────────────────────────────────────────────────────────
 const API_BASE = "";  // same origin in production; Vite proxy in dev
@@ -995,7 +996,7 @@ export default function App() {
   // Auto-collapse sidebar when entering drafter/hands, expand when returning to explorer
   const setAppModeWithSidebar = useCallback((mode, opts) => {
     setAppMode(mode);
-    setSidebarCollapsed(mode === "drafter" || mode === "hands" || mode === "score" || mode === "wiki");
+    setSidebarCollapsed(mode === "drafter" || mode === "hands" || mode === "score" || mode === "wiki" || mode === "live");
     if (opts?.draftType) setHandsDraftType(opts.draftType);
     if (opts?.wikiCardId) setWikiCardId(opts.wikiCardId);
     else if (mode === "wiki" && !opts?.wikiCardId) setWikiCardId(null);
@@ -1396,6 +1397,7 @@ export default function App() {
       { mode: "hands", emoji: "\uD83E\uDD1D", label: "Hands" },
       { mode: "score", emoji: "\uD83D\uDCCB", label: "Score" },
       { mode: "wiki", emoji: "\uD83D\uDCD6", label: "Wiki" },
+      { mode: "live", emoji: "\uD83C\uDFAF", label: "Live" },
     ];
     const mobileModeSwitcher = (
       <div style={{ display: "flex", gap: 3, background: E.surface, borderRadius: 8, padding: 2, border: `1px solid ${E.border}` }}>
@@ -1426,6 +1428,7 @@ export default function App() {
         { mode: "hands", emoji: "\uD83E\uDD1D", title: "Community Hands", desc: "Browse drafted hands" },
         { mode: "score", emoji: "\uD83D\uDCCB", title: "Score Sheet", desc: "Calculate your game score" },
         { mode: "wiki", emoji: "\uD83D\uDCD6", title: "Card Wiki", desc: "Combos, tips & anti-combos" },
+        { mode: "live", emoji: "\uD83C\uDFAF", title: "Live Draft", desc: "Draft with friends at the table" },
       ];
       return (
         <div style={{
@@ -1499,7 +1502,7 @@ export default function App() {
       );
     }
 
-    if (appMode === "drafter" || appMode === "hands" || appMode === "score" || appMode === "wiki") {
+    if (appMode === "drafter" || appMode === "hands" || appMode === "score" || appMode === "wiki" || appMode === "live") {
       return (
         <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: E.bg, color: E.textSecondary, fontFamily: "Inter, system-ui, sans-serif" }}>
           {/* Mobile drafter/hands/score/wiki header */}
@@ -1518,6 +1521,8 @@ export default function App() {
               ? <CommunityHands allCards={allCards} initialDraftType={handsDraftType} />
               : appMode === "wiki"
               ? <CardWiki allCards={allCards} initialCardId={wikiCardId} />
+              : appMode === "live"
+              ? <LiveGame allCards={allCards} />
               : <ScoreSheet allCards={activeCards} />
             }
           </div>
@@ -1715,6 +1720,7 @@ export default function App() {
             { mode: "hands", emoji: "\uD83E\uDD1D", label: "Hands" },
             { mode: "score", emoji: "\uD83D\uDCCB", label: "Score" },
             { mode: "wiki", emoji: "\uD83D\uDCD6", label: "Wiki" },
+            { mode: "live", emoji: "\uD83C\uDFAF", label: "Live" },
           ].map(({ mode, emoji, label }) => {
             const isActive = appMode === mode;
             return (
@@ -1888,6 +1894,10 @@ export default function App() {
       ) : appMode === "wiki" ? (
         <div style={{ flex: 1, overflow: "hidden" }}>
           <CardWiki allCards={allCards} initialCardId={wikiCardId} />
+        </div>
+      ) : appMode === "live" ? (
+        <div style={{ flex: 1, overflow: "hidden" }}>
+          <LiveGame allCards={allCards} />
         </div>
       ) : (
       <>

@@ -376,6 +376,53 @@ def _get_db() -> sqlite3.Connection:
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_wiki_tips_card ON wiki_tips(cardId)")
 
+    # ── Live rooms tables ────────────────────────────────────────────────────
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS rooms (
+            code            TEXT PRIMARY KEY,
+            phase           TEXT NOT NULL DEFAULT 'lobby',
+            creatorName     TEXT NOT NULL,
+            maxPlayers      INTEGER NOT NULL DEFAULT 5,
+            deckSelection   TEXT NOT NULL DEFAULT '[]',
+            norwayOnly      INTEGER NOT NULL DEFAULT 1,
+            seed            INTEGER,
+            draftRound      INTEGER NOT NULL DEFAULT 0,
+            draftPhase      TEXT NOT NULL DEFAULT 'occ',
+            packs           TEXT NOT NULL DEFAULT '[]',
+            roundCards      TEXT NOT NULL DEFAULT '[]',
+            gameRound       INTEGER NOT NULL DEFAULT 0,
+            settings        TEXT NOT NULL DEFAULT '{}',
+            createdAt       TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS room_players (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            roomCode        TEXT NOT NULL,
+            seat            INTEGER NOT NULL,
+            username        TEXT NOT NULL,
+            hand            TEXT NOT NULL DEFAULT '[]',
+            playedCards     TEXT NOT NULL DEFAULT '[]',
+            discardedCards  TEXT NOT NULL DEFAULT '[]',
+            currentPick     TEXT DEFAULT NULL,
+            connected       INTEGER NOT NULL DEFAULT 1,
+            UNIQUE (roomCode, seat),
+            UNIQUE (roomCode, username)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_room_players_room ON room_players(roomCode)")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS room_log (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            roomCode        TEXT NOT NULL,
+            action          TEXT NOT NULL,
+            seat            INTEGER,
+            data            TEXT NOT NULL DEFAULT '{}',
+            timestamp       TEXT NOT NULL
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_room_log_room ON room_log(roomCode)")
+
     # ── Scores table ──────────────────────────────────────────────────────────
     conn.execute("""
         CREATE TABLE IF NOT EXISTS scores (
@@ -1349,6 +1396,583 @@ async def image_proxy(url: str = ""):
         return JSONResponse(status_code=e.response.status_code, content={"error": str(e)})
     except Exception as e:
         return JSONResponse(status_code=502, content={"error": str(e)})
+
+# ── Live Rooms API ────────────────────────────────────────────────────────────
+
+import random as _random
+import string as _string
+
+def _generate_room_code(length=6):
+    """Generate a short uppercase room code."""
+    return "".join(_random.choices(_string.ascii_uppercase + _string.digits, k=length))
+
+
+def _build_draft_packs(deck_selection: list[str], norway_only: bool, seed: int, num_players: int):
+    """Build draft packs for a live room using the same logic as the solo drafter."""
+    rng = _random.Random(seed)
+    eligible = [c for c in ALL_CARDS if not c.get("banned")]
+    if norway_only:
+        eligible = [c for c in eligible if c.get("isNo")]
+    if deck_selection:
+        eligible = [c for c in eligible if c.get("deck") in deck_selection]
+    occs = [c for c in eligible if c["type"] == "Occupation"]
+    minors = [c for c in eligible if c["type"] == "MinorImprovement"]
+    rng.shuffle(occs)
+    rng.shuffle(minors)
+    pack_size = 9  # Always 9 cards per pack — pick 7, discard 2
+    occ_packs = []
+    minor_packs = []
+    for p in range(num_players):
+        occ_packs.append([c["id"] for c in occs[p * pack_size:(p + 1) * pack_size]])
+        minor_packs.append([c["id"] for c in minors[p * pack_size:(p + 1) * pack_size]])
+    return occ_packs, minor_packs
+
+
+class CreateRoomRequest(BaseModel):
+    username: str
+    maxPlayers: int = 5
+    deckSelection: list[str] = []
+    norwayOnly: bool = True
+
+
+class JoinRoomRequest(BaseModel):
+    username: str
+
+
+class PickCardRequest(BaseModel):
+    cardId: str
+
+
+@app.post("/api/rooms")
+def create_room(req: CreateRoomRequest):
+    """Create a new live draft room."""
+    if not req.username.strip():
+        return JSONResponse(status_code=400, content={"error": "username required"})
+    if req.maxPlayers < 1 or req.maxPlayers > 5:
+        return JSONResponse(status_code=400, content={"error": "1-5 players allowed"})
+
+    conn = _get_db()
+    # Generate unique code
+    for _ in range(20):
+        code = _generate_room_code()
+        existing = conn.execute("SELECT code FROM rooms WHERE code = ?", (code,)).fetchone()
+        if not existing:
+            break
+    else:
+        conn.close()
+        return JSONResponse(status_code=500, content={"error": "could not generate unique room code"})
+
+    ts = datetime.datetime.utcnow().isoformat() + "Z"
+    seed = _random.randint(0, 2**31)
+    conn.execute(
+        """INSERT INTO rooms (code, phase, creatorName, maxPlayers, deckSelection, norwayOnly, seed, createdAt)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        (code, "lobby", req.username.strip(), req.maxPlayers,
+         json.dumps(req.deckSelection), 1 if req.norwayOnly else 0, seed, ts)
+    )
+    # Creator takes seat 0
+    conn.execute(
+        "INSERT INTO room_players (roomCode, seat, username) VALUES (?,?,?)",
+        (code, 0, req.username.strip())
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "code": code, "seat": 0}
+
+
+@app.post("/api/rooms/{code}/join")
+def join_room(code: str, req: JoinRoomRequest):
+    """Join an existing room."""
+    if not req.username.strip():
+        return JSONResponse(status_code=400, content={"error": "username required"})
+    conn = _get_db()
+    room = conn.execute("SELECT * FROM rooms WHERE code = ?", (code.upper(),)).fetchone()
+    if not room:
+        conn.close()
+        return JSONResponse(status_code=404, content={"error": "room not found"})
+    if room["phase"] != "lobby":
+        # Allow rejoin if player is already in room
+        existing = conn.execute(
+            "SELECT seat FROM room_players WHERE roomCode = ? AND username = ?",
+            (code.upper(), req.username.strip())
+        ).fetchone()
+        if existing:
+            conn.close()
+            return {"ok": True, "code": code.upper(), "seat": existing["seat"], "rejoined": True}
+        conn.close()
+        return JSONResponse(status_code=400, content={"error": "draft already started"})
+
+    # Check if already in room
+    existing = conn.execute(
+        "SELECT seat FROM room_players WHERE roomCode = ? AND username = ?",
+        (code.upper(), req.username.strip())
+    ).fetchone()
+    if existing:
+        conn.close()
+        return {"ok": True, "code": code.upper(), "seat": existing["seat"], "rejoined": True}
+
+    # Find next available seat
+    players = conn.execute(
+        "SELECT seat FROM room_players WHERE roomCode = ? ORDER BY seat", (code.upper(),)
+    ).fetchall()
+    taken = {p["seat"] for p in players}
+    if len(taken) >= room["maxPlayers"]:
+        conn.close()
+        return JSONResponse(status_code=400, content={"error": "room is full"})
+    seat = next(s for s in range(room["maxPlayers"]) if s not in taken)
+    conn.execute(
+        "INSERT INTO room_players (roomCode, seat, username) VALUES (?,?,?)",
+        (code.upper(), seat, req.username.strip())
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "code": code.upper(), "seat": seat}
+
+
+@app.get("/api/rooms/{code}/state")
+def room_state(code: str, seat: int = -1):
+    """Poll the current room state. Pass seat= to get your private hand/pack."""
+    conn = _get_db()
+    room = conn.execute("SELECT * FROM rooms WHERE code = ?", (code.upper(),)).fetchone()
+    if not room:
+        conn.close()
+        return JSONResponse(status_code=404, content={"error": "room not found"})
+
+    players = conn.execute(
+        "SELECT seat, username, hand, playedCards, discardedCards, currentPick, connected FROM room_players WHERE roomCode = ? ORDER BY seat",
+        (code.upper(),)
+    ).fetchall()
+
+    player_list = []
+    my_hand = []
+    my_pack = []
+    picks_this_round = []
+    for p in players:
+        hand = json.loads(p["hand"])
+        played = json.loads(p["playedCards"])
+        discarded = json.loads(p["discardedCards"])
+        has_picked = p["currentPick"] is not None
+        picks_this_round.append(has_picked)
+
+        info = {
+            "seat": p["seat"],
+            "username": p["username"],
+            "handSize": len(hand),
+            "playedCards": played,
+            "discardedCards": discarded,
+            "hasPicked": has_picked,
+            "connected": bool(p["connected"]),
+        }
+        # Only reveal hand to the player themselves
+        if p["seat"] == seat:
+            info["hand"] = hand
+            my_hand = hand
+        player_list.append(info)
+
+    # Current pack for this player during draft
+    packs = json.loads(room["packs"] or "[]")
+    if room["phase"] == "drafting" and 0 <= seat < len(packs):
+        my_pack = packs[seat]
+
+    # Card lookup for pack display
+    cards_in_pack = [_CARDS_BY_ID_WIKI.get(cid) for cid in my_pack if _CARDS_BY_ID_WIKI.get(cid)]
+
+    all_picked = all(picks_this_round) and len(picks_this_round) > 0
+
+    # Build play-round map from log: { cardId: round } for all played cards
+    play_rounds = {}
+    if room["phase"] == "playing":
+        log_rows = conn.execute(
+            "SELECT data FROM room_log WHERE roomCode = ? AND action = 'play'",
+            (code.upper(),)
+        ).fetchall()
+        for lr in log_rows:
+            d = json.loads(lr["data"])
+            if "cardId" in d and "round" in d:
+                play_rounds[d["cardId"]] = d["round"]
+
+    conn.close()
+    return {
+        "code": code.upper(),
+        "phase": room["phase"],
+        "creatorName": room["creatorName"],
+        "maxPlayers": room["maxPlayers"],
+        "norwayOnly": bool(room["norwayOnly"]),
+        "deckSelection": json.loads(room["deckSelection"]),
+        "draftRound": room["draftRound"],
+        "draftPhase": room["draftPhase"],
+        "gameRound": room["gameRound"],
+        "roundCards": json.loads(room["roundCards"] or "[]"),
+        "players": player_list,
+        "myPack": cards_in_pack,
+        "allPicked": all_picked,
+        "playRounds": play_rounds,
+    }
+
+
+@app.post("/api/rooms/{code}/start")
+def start_draft(code: str):
+    """Creator starts the draft — generates packs and moves to drafting phase."""
+    conn = _get_db()
+    room = conn.execute("SELECT * FROM rooms WHERE code = ?", (code.upper(),)).fetchone()
+    if not room:
+        conn.close()
+        return JSONResponse(status_code=404, content={"error": "room not found"})
+    if room["phase"] != "lobby":
+        conn.close()
+        return JSONResponse(status_code=400, content={"error": "draft already started"})
+
+    players = conn.execute(
+        "SELECT seat FROM room_players WHERE roomCode = ?", (code.upper(),)
+    ).fetchall()
+    num_players = len(players)
+    if num_players < 1:
+        conn.close()
+        return JSONResponse(status_code=400, content={"error": "need at least 1 player"})
+
+    deck_sel = json.loads(room["deckSelection"])
+    occ_packs, minor_packs = _build_draft_packs(
+        deck_sel, bool(room["norwayOnly"]), room["seed"], num_players
+    )
+
+    # Store occ packs as current packs, save minor packs in settings for later
+    settings = json.loads(room["settings"] or "{}")
+    settings["minorPacks"] = minor_packs
+
+    conn.execute(
+        """UPDATE rooms SET phase = 'drafting', draftRound = 1, draftPhase = 'occ',
+           packs = ?, settings = ? WHERE code = ?""",
+        (json.dumps(occ_packs), json.dumps(settings), code.upper())
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "numPlayers": num_players}
+
+
+@app.post("/api/rooms/{code}/pick")
+def pick_card(code: str, req: PickCardRequest, seat: int = 0):
+    """Player picks a card from their current pack."""
+    conn = _get_db()
+    room = conn.execute("SELECT * FROM rooms WHERE code = ?", (code.upper(),)).fetchone()
+    if not room:
+        conn.close()
+        return JSONResponse(status_code=404, content={"error": "room not found"})
+    if room["phase"] != "drafting":
+        conn.close()
+        return JSONResponse(status_code=400, content={"error": "not in drafting phase"})
+
+    packs = json.loads(room["packs"])
+    if seat < 0 or seat >= len(packs):
+        conn.close()
+        return JSONResponse(status_code=400, content={"error": "invalid seat"})
+
+    # Verify card is in this player's pack
+    if req.cardId not in packs[seat]:
+        conn.close()
+        return JSONResponse(status_code=400, content={"error": "card not in your pack"})
+
+    # Check if player already picked this round
+    player = conn.execute(
+        "SELECT currentPick FROM room_players WHERE roomCode = ? AND seat = ?",
+        (code.upper(), seat)
+    ).fetchone()
+    if player and player["currentPick"]:
+        conn.close()
+        return JSONResponse(status_code=400, content={"error": "already picked this round"})
+
+    # Record the pick
+    conn.execute(
+        "UPDATE room_players SET currentPick = ? WHERE roomCode = ? AND seat = ?",
+        (req.cardId, code.upper(), seat)
+    )
+    conn.commit()
+
+    # Check if ALL players have picked
+    all_players = conn.execute(
+        "SELECT seat, currentPick, hand FROM room_players WHERE roomCode = ? ORDER BY seat",
+        (code.upper(),)
+    ).fetchall()
+    all_picked = all(p["currentPick"] for p in all_players)
+
+    if all_picked:
+        # Process the round: add picks to hands, remove from packs, rotate
+        for p in all_players:
+            hand = json.loads(p["hand"])
+            hand.append(p["currentPick"])
+            packs[p["seat"]] = [cid for cid in packs[p["seat"]] if cid != p["currentPick"]]
+            conn.execute(
+                "UPDATE room_players SET hand = ?, currentPick = NULL WHERE roomCode = ? AND seat = ?",
+                (json.dumps(hand), code.upper(), p["seat"])
+            )
+
+        num_players = len(all_players)
+        current_round = room["draftRound"]
+
+        # Rotate packs: each player gets the next player's pack
+        rotated = [packs[(i + 1) % num_players] for i in range(num_players)]
+
+        if current_round >= 7:
+            # Phase complete
+            if room["draftPhase"] == "occ":
+                # Switch to minor improvement draft
+                settings = json.loads(room["settings"] or "{}")
+                minor_packs = settings.get("minorPacks", [])
+                conn.execute(
+                    """UPDATE rooms SET draftRound = 1, draftPhase = 'minor',
+                       packs = ? WHERE code = ?""",
+                    (json.dumps(minor_packs), code.upper())
+                )
+            else:
+                # Draft complete → playing phase
+                conn.execute(
+                    "UPDATE rooms SET phase = 'playing', packs = '[]' WHERE code = ?",
+                    (code.upper(),)
+                )
+        else:
+            # Next round
+            conn.execute(
+                "UPDATE rooms SET draftRound = ?, packs = ? WHERE code = ?",
+                (current_round + 1, json.dumps(rotated), code.upper())
+            )
+        conn.commit()
+
+    conn.close()
+    return {"ok": True, "allPicked": all_picked}
+
+
+@app.post("/api/rooms/{code}/play")
+def play_card(code: str, req: PickCardRequest, seat: int = 0):
+    """Player plays a card from their hand during the game phase."""
+    conn = _get_db()
+    room = conn.execute("SELECT * FROM rooms WHERE code = ?", (code.upper(),)).fetchone()
+    if not room or room["phase"] != "playing":
+        conn.close()
+        return JSONResponse(status_code=400, content={"error": "not in playing phase"})
+
+    player = conn.execute(
+        "SELECT hand, playedCards FROM room_players WHERE roomCode = ? AND seat = ?",
+        (code.upper(), seat)
+    ).fetchone()
+    if not player:
+        conn.close()
+        return JSONResponse(status_code=404, content={"error": "player not found"})
+
+    hand = json.loads(player["hand"])
+    if req.cardId not in hand:
+        conn.close()
+        return JSONResponse(status_code=400, content={"error": "card not in your hand"})
+
+    hand.remove(req.cardId)
+    played = json.loads(player["playedCards"])
+    played.append(req.cardId)
+
+    conn.execute(
+        "UPDATE room_players SET hand = ?, playedCards = ? WHERE roomCode = ? AND seat = ?",
+        (json.dumps(hand), json.dumps(played), code.upper(), seat)
+    )
+    # Log the action with current game round
+    ts = datetime.datetime.utcnow().isoformat() + "Z"
+    card_name = _CARDS_BY_ID_WIKI.get(req.cardId, {}).get("name", req.cardId)
+    conn.execute(
+        "INSERT INTO room_log (roomCode, action, seat, data, timestamp) VALUES (?,?,?,?,?)",
+        (code.upper(), "play", seat, json.dumps({"cardId": req.cardId, "name": card_name, "round": room["gameRound"]}), ts)
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+@app.post("/api/rooms/{code}/round")
+def set_game_round(code: str, round: int = 1):
+    """Set the current game round (1-14 in Agricola)."""
+    if round < 0 or round > 14:
+        return JSONResponse(status_code=400, content={"error": "round must be 0-14"})
+    conn = _get_db()
+    room = conn.execute("SELECT * FROM rooms WHERE code = ?", (code.upper(),)).fetchone()
+    if not room or room["phase"] != "playing":
+        conn.close()
+        return JSONResponse(status_code=400, content={"error": "not in playing phase"})
+    conn.execute("UPDATE rooms SET gameRound = ? WHERE code = ?", (round, code.upper()))
+    ts = datetime.datetime.utcnow().isoformat() + "Z"
+    conn.execute(
+        "INSERT INTO room_log (roomCode, action, seat, data, timestamp) VALUES (?,?,?,?,?)",
+        (code.upper(), "round", -1, json.dumps({"round": round}), ts)
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "round": round}
+
+
+@app.post("/api/rooms/{code}/discard")
+def discard_card(code: str, req: PickCardRequest, seat: int = 0):
+    """Discard a card from hand or played cards."""
+    conn = _get_db()
+    room = conn.execute("SELECT * FROM rooms WHERE code = ?", (code.upper(),)).fetchone()
+    if not room or room["phase"] != "playing":
+        conn.close()
+        return JSONResponse(status_code=400, content={"error": "not in playing phase"})
+
+    player = conn.execute(
+        "SELECT hand, playedCards, discardedCards FROM room_players WHERE roomCode = ? AND seat = ?",
+        (code.upper(), seat)
+    ).fetchone()
+    if not player:
+        conn.close()
+        return JSONResponse(status_code=404, content={"error": "player not found"})
+
+    hand = json.loads(player["hand"])
+    played = json.loads(player["playedCards"])
+    discarded = json.loads(player["discardedCards"])
+
+    if req.cardId in hand:
+        hand.remove(req.cardId)
+    elif req.cardId in played:
+        played.remove(req.cardId)
+    else:
+        conn.close()
+        return JSONResponse(status_code=400, content={"error": "card not found in hand or played"})
+
+    discarded.append(req.cardId)
+    conn.execute(
+        "UPDATE room_players SET hand = ?, playedCards = ?, discardedCards = ? WHERE roomCode = ? AND seat = ?",
+        (json.dumps(hand), json.dumps(played), json.dumps(discarded), code.upper(), seat)
+    )
+    ts = datetime.datetime.utcnow().isoformat() + "Z"
+    conn.execute(
+        "INSERT INTO room_log (roomCode, action, seat, data, timestamp) VALUES (?,?,?,?,?)",
+        (code.upper(), "discard", seat, json.dumps({"cardId": req.cardId}), ts)
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+@app.post("/api/rooms/{code}/draw")
+def draw_cards(code: str, seat: int = 0, cardType: str = "Occupation", count: int = 1):
+    """Draw new random cards (for Broom-type effects)."""
+    conn = _get_db()
+    room = conn.execute("SELECT * FROM rooms WHERE code = ?", (code.upper(),)).fetchone()
+    if not room or room["phase"] != "playing":
+        conn.close()
+        return JSONResponse(status_code=400, content={"error": "not in playing phase"})
+
+    player = conn.execute(
+        "SELECT hand FROM room_players WHERE roomCode = ? AND seat = ?",
+        (code.upper(), seat)
+    ).fetchone()
+    if not player:
+        conn.close()
+        return JSONResponse(status_code=404, content={"error": "player not found"})
+
+    # Gather all cards already in the room (all players' hands, played, discarded)
+    all_room_players = conn.execute(
+        "SELECT hand, playedCards, discardedCards FROM room_players WHERE roomCode = ?",
+        (code.upper(),)
+    ).fetchall()
+    used_ids = set()
+    for rp in all_room_players:
+        used_ids.update(json.loads(rp["hand"]))
+        used_ids.update(json.loads(rp["playedCards"]))
+        used_ids.update(json.loads(rp["discardedCards"]))
+
+    # Find eligible cards not already in the room
+    eligible = [c for c in ALL_CARDS if c["type"] == cardType and c["id"] not in used_ids and not c.get("banned")]
+    if bool(room["norwayOnly"]):
+        eligible = [c for c in eligible if c.get("isNo")]
+    deck_sel = json.loads(room["deckSelection"])
+    if deck_sel:
+        eligible = [c for c in eligible if c.get("deck") in deck_sel]
+
+    rng = _random.Random()
+    rng.shuffle(eligible)
+    drawn = [c["id"] for c in eligible[:count]]
+
+    hand = json.loads(player["hand"])
+    hand.extend(drawn)
+    conn.execute(
+        "UPDATE room_players SET hand = ? WHERE roomCode = ? AND seat = ?",
+        (json.dumps(hand), code.upper(), seat)
+    )
+    ts = datetime.datetime.utcnow().isoformat() + "Z"
+    conn.execute(
+        "INSERT INTO room_log (roomCode, action, seat, data, timestamp) VALUES (?,?,?,?,?)",
+        (code.upper(), "draw", seat, json.dumps({"drawn": drawn, "type": cardType}), ts)
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "drawn": drawn}
+
+
+@app.post("/api/rooms/{code}/pass-minor")
+def pass_minor(code: str, req: PickCardRequest, seat: int = 0):
+    """Pass a played minor improvement to the next player in turn order."""
+    conn = _get_db()
+    room = conn.execute("SELECT * FROM rooms WHERE code = ?", (code.upper(),)).fetchone()
+    if not room or room["phase"] != "playing":
+        conn.close()
+        return JSONResponse(status_code=400, content={"error": "not in playing phase"})
+
+    players = conn.execute(
+        "SELECT seat, hand, playedCards FROM room_players WHERE roomCode = ? ORDER BY seat",
+        (code.upper(),)
+    ).fetchall()
+    num_players = len(players)
+
+    player = next((p for p in players if p["seat"] == seat), None)
+    if not player:
+        conn.close()
+        return JSONResponse(status_code=404, content={"error": "player not found"})
+
+    played = json.loads(player["playedCards"])
+    if req.cardId not in played:
+        conn.close()
+        return JSONResponse(status_code=400, content={"error": "card not in your played cards"})
+
+    # Remove from played, add to next player's hand
+    played.remove(req.cardId)
+    next_seat = (seat + 1) % num_players
+    next_player = next((p for p in players if p["seat"] == next_seat), None)
+    if not next_player:
+        conn.close()
+        return JSONResponse(status_code=400, content={"error": "next player not found"})
+
+    next_hand = json.loads(next_player["hand"])
+    next_hand.append(req.cardId)
+
+    conn.execute(
+        "UPDATE room_players SET playedCards = ? WHERE roomCode = ? AND seat = ?",
+        (json.dumps(played), code.upper(), seat)
+    )
+    conn.execute(
+        "UPDATE room_players SET hand = ? WHERE roomCode = ? AND seat = ?",
+        (json.dumps(next_hand), code.upper(), next_seat)
+    )
+    ts = datetime.datetime.utcnow().isoformat() + "Z"
+    card_name = _CARDS_BY_ID_WIKI.get(req.cardId, {}).get("name", req.cardId)
+    conn.execute(
+        "INSERT INTO room_log (roomCode, action, seat, data, timestamp) VALUES (?,?,?,?,?)",
+        (code.upper(), "pass_minor", seat,
+         json.dumps({"cardId": req.cardId, "name": card_name, "toSeat": next_seat}), ts)
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "passedTo": next_seat}
+
+
+@app.get("/api/rooms/{code}/log")
+def room_log(code: str, since: int = 0):
+    """Get the action log for a room (for spectator view and history)."""
+    conn = _get_db()
+    rows = conn.execute(
+        "SELECT id, action, seat, data, timestamp FROM room_log WHERE roomCode = ? AND id > ? ORDER BY id",
+        (code.upper(), since)
+    ).fetchall()
+    conn.close()
+    return {
+        "log": [{"id": r["id"], "action": r["action"], "seat": r["seat"],
+                 "data": json.loads(r["data"]), "timestamp": r["timestamp"]} for r in rows]
+    }
+
 
 # ── Card Wiki API ─────────────────────────────────────────────────────────────
 
