@@ -2325,4 +2325,5 @@ if os.path.isdir(DIST_DIR):
         file_path = os.path.join(DIST_DIR, full_path)
         if full_path and os.path.isfile(file_path):
             return FileResponse(file_path)
-        return FileResponse(os.path.join(DIST_DIR, "index.html"))
+        # no-cache on index.html so browsers always fetch fresh JS bundle references
+        return FileResponse(os.path.join(DIST_DIR, "index.html"), headers={"Cache-Control": "no-cache"})
