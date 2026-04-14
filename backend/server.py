@@ -868,6 +868,26 @@ def list_challenges(page: int = 1, pageSize: int = 20):
         "totalPages": max(1, (total + pageSize - 1) // pageSize),
     }
 
+class DeleteChallengeRequest(BaseModel):
+    creatorName: str
+
+@app.post("/api/challenges/{id}/delete")
+def delete_challenge(id: str, req: DeleteChallengeRequest):
+    """Delete a challenge and all its attempts. Requires the creator's username."""
+    conn = _get_db()
+    row = conn.execute("SELECT creatorName FROM challenges WHERE id = ?", (id,)).fetchone()
+    if not row:
+        conn.close()
+        return JSONResponse(status_code=404, content={"error": "Challenge not found"})
+    if row["creatorName"].strip().lower() != req.creatorName.strip().lower():
+        conn.close()
+        return JSONResponse(status_code=403, content={"error": "Username does not match the challenge creator"})
+    conn.execute("DELETE FROM challenge_attempts WHERE challengeId = ?", (id,))
+    conn.execute("DELETE FROM challenges WHERE id = ?", (id,))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
 # ── Community Hands endpoints ────────────────────────────────────────────────
 
 # Pre-compute card name → id lookup for search

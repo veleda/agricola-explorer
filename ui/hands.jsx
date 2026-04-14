@@ -450,6 +450,13 @@ async function fetchChallengeAttempts(id) {
   if (!res.ok) throw new Error("Failed to fetch attempts");
   return res.json();
 }
+async function deleteChallenge(id, creatorName) {
+  const res = await fetch(`${API_BASE}/api/challenges/${id}/delete`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ creatorName }),
+  });
+  return res.json();
+}
 
 function ChallengesTab({ cardMap }) {
   const [data, setData] = useState(null);
@@ -458,6 +465,10 @@ function ChallengesTab({ cardMap }) {
   const [expandedId, setExpandedId] = useState(null);
   const [detailsCache, setDetailsCache] = useState({}); // challengeId -> full comparison
   const [expandedAttempt, setExpandedAttempt] = useState({}); // challengeId -> attemptIdx
+  const [deleteConfirm, setDeleteConfirm] = useState(null); // challengeId being confirmed
+  const [deleteName, setDeleteName] = useState("");
+  const [deleteError, setDeleteError] = useState(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -479,6 +490,27 @@ function ChallengesTab({ cardMap }) {
 
   const takeChallenge = (ch) => {
     window.location.href = `/challenge/${ch.id}`;
+  };
+
+  const handleDelete = async (chId) => {
+    if (!deleteName.trim()) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const result = await deleteChallenge(chId, deleteName.trim());
+      if (result.ok) {
+        setDeleteConfirm(null);
+        setDeleteName("");
+        // Refresh the list
+        fetchChallenges(page).then(d => setData(d));
+      } else {
+        setDeleteError(result.error || "Failed to delete");
+      }
+    } catch {
+      setDeleteError("Network error");
+    } finally {
+      setDeleting(false);
+    }
   };
 
   if (loading) return <div style={{ padding: 40, textAlign: "center", color: T.textMuted }}>Loading challenges...</div>;
@@ -675,6 +707,60 @@ function ChallengesTab({ cardMap }) {
                     <span style={{ flex: 1, minWidth: 150, fontSize: 11, color: T.text, wordBreak: "break-all" }}>{challengeUrl}</span>
                     <CopyButton text={challengeUrl} />
                   </div>
+
+                  {/* Delete challenge */}
+                  {deleteConfirm === ch.id ? (
+                    <div style={{
+                      marginTop: 8, padding: "10px 12px", borderRadius: 8,
+                      background: "#fef2f2", border: "1px solid #fca5a544",
+                      display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap",
+                    }}>
+                      <span style={{ fontSize: 11, color: "#dc2626", fontWeight: 600 }}>Type creator's name to confirm:</span>
+                      <input
+                        value={deleteName}
+                        onChange={e => { setDeleteName(e.target.value); setDeleteError(null); }}
+                        onKeyDown={e => e.key === "Enter" && handleDelete(ch.id)}
+                        placeholder={ch.creatorName}
+                        style={{
+                          flex: 1, minWidth: 100, padding: "4px 8px", borderRadius: 6,
+                          border: "1px solid #fca5a5", fontSize: 12, outline: "none",
+                        }}
+                      />
+                      <button
+                        onClick={() => handleDelete(ch.id)}
+                        disabled={deleting || !deleteName.trim()}
+                        style={{
+                          padding: "4px 10px", borderRadius: 6, border: "none",
+                          background: deleting || !deleteName.trim() ? "#fca5a5" : "#dc2626",
+                          color: "#fff", fontSize: 11, fontWeight: 700,
+                          cursor: deleting || !deleteName.trim() ? "default" : "pointer",
+                        }}>
+                        {deleting ? "..." : "Delete"}
+                      </button>
+                      <button
+                        onClick={() => { setDeleteConfirm(null); setDeleteName(""); setDeleteError(null); }}
+                        style={{
+                          padding: "4px 10px", borderRadius: 6, border: `1px solid ${T.border}`,
+                          background: T.surface, color: T.textSecondary,
+                          fontSize: 11, fontWeight: 600, cursor: "pointer",
+                        }}>
+                        Cancel
+                      </button>
+                      {deleteError && (
+                        <div style={{ width: "100%", fontSize: 11, color: "#dc2626", marginTop: 2 }}>{deleteError}</div>
+                      )}
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => { setDeleteConfirm(ch.id); setDeleteName(""); setDeleteError(null); }}
+                      style={{
+                        marginTop: 8, padding: "4px 10px", borderRadius: 6,
+                        border: `1px solid ${T.border}`, background: "transparent",
+                        color: T.textMuted, fontSize: 11, cursor: "pointer",
+                      }}>
+                      Delete challenge
+                    </button>
+                  )}
                 </div>
               )}
             </div>
