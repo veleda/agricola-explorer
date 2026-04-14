@@ -1316,8 +1316,13 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
           const minorCards = allCards
             .filter(c => c.type === "MinorImprovement" && decks.includes(c.deck))
             .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)); // sort by ID for determinism
-          const minorPool = rngRef.current
-            ? seededShuffle(minorCards, rngRef.current)
+          // Use a FRESH RNG seeded from the original seed (not rngRef.current).
+          // The occ draft changes rngRef state differently for creator vs challenger
+          // (creator NPCs use RNG, challenger NPCs are deterministic), so reusing
+          // rngRef.current here would produce different minor packs.
+          const minorRng = draftSeed != null ? mulberry32(draftSeed + 1) : null;
+          const minorPool = minorRng
+            ? seededShuffle(minorCards, minorRng)
             : shuffle(minorCards);
           const newMinorPacks = [];
           for (let p = 0; p < NUM_PLAYERS; p++) {
@@ -1333,7 +1338,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
     } else {
       setRound(round + 1);
     }
-  }, [packs, myPicks, pickOrder, round, maxPicks, isMini, isCombo, comboPhase, popularityMap, miniDeckNumber, allCards, selectedDecks, availableDecks, packSize, lastPickPopularity]);
+  }, [packs, myPicks, pickOrder, round, maxPicks, isMini, isCombo, comboPhase, popularityMap, miniDeckNumber, allCards, selectedDecks, availableDecks, packSize, lastPickPopularity, draftSeed]);
 
   const handleSave = useCallback(async (combos) => {
     if (saving) return;
