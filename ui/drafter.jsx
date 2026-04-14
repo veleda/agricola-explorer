@@ -1094,7 +1094,6 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
   const [draftSeed, setDraftSeed] = useState(null);
   const rngRef = useRef(null);
   const isChallengeRef = useRef(false); // true when running a challenge draft
-  const challengeDecksRef = useRef(null); // stores challenge's deckSelection so effects can't overwrite it
   const [challengeMode, setChallengeMode] = useState(null); // null | { id, creatorName, ... }
   const [challengeResult, setChallengeResult] = useState(null); // comparison data after friend completes
   const [challengeUrl, setChallengeUrl] = useState(null); // URL after creating a challenge
@@ -1136,7 +1135,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
   }, [allCards, activeDraftType, isMini]);
 
   useEffect(() => {
-    if (!isMini && !challengeDecksRef.current) {
+    if (!isMini) {
       setSelectedDecks(availableDecks.length > 0 ? [...availableDecks] : []);
     }
   }, [availableDecks, isMini]);
@@ -1220,7 +1219,6 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
     const newPacks = initPacks(draftableCards, isMini, rngRef.current);
     // In challenge mode: NPCs pick deterministically (no RNG).
     isChallengeRef.current = !!overrideSeed;
-    if (!overrideSeed) challengeDecksRef.current = null; // clear for non-challenge drafts
     setMyPicks([]);
     setPickOrder([]);
     setRound(1);
@@ -1311,8 +1309,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
           setPacks(result);
         } else {
           // For full combo: build new packs from minor improvement pool
-          // In challenge mode, use the stored challenge decks (immune to React effect overwrites)
-          const decks = (isChallengeRef.current && challengeDecksRef.current) || selectedDecks || availableDecks;
+          const decks = selectedDecks || availableDecks;
           const minorCards = allCards
             .filter(c => c.type === "MinorImprovement" && decks.includes(c.deck))
             .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)); // sort by ID for determinism
@@ -1471,10 +1468,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
         setChallengeMode(data);
         setDrafterMode(data.drafterMode === "fullCombo" ? "fullCombo" : "full");
         setDraftType(data.draftType || "Occupation");
-        if (data.deckSelection) {
-          challengeDecksRef.current = data.deckSelection;
-          setSelectedDecks(data.deckSelection);
-        }
+        if (data.deckSelection) setSelectedDecks(data.deckSelection);
         if (data.norwayOnly != null) setNorwayOnly(data.norwayOnly);
         setPhase("setup");
         // Clear the /challenge/ URL immediately so it won't re-trigger
