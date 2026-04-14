@@ -883,6 +883,8 @@ def delete_challenge(id: str, req: DeleteChallengeRequest):
         conn.close()
         return JSONResponse(status_code=403, content={"error": "Username does not match the challenge creator"})
     conn.execute("DELETE FROM challenge_attempts WHERE challengeId = ?", (id,))
+    # Keep drafts — those are valid community hands even without the challenge
+    conn.execute("UPDATE drafts SET challengeId = NULL WHERE challengeId = ?", (id,))
     conn.execute("DELETE FROM challenges WHERE id = ?", (id,))
     conn.commit()
     conn.close()
