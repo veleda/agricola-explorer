@@ -1073,6 +1073,12 @@ export default function App() {
   // Compute theme object
   const E = explorerTheme === "dark" ? EXPLORER_DARK : EXPLORER_LIGHT;
 
+  // Sync body background to prevent dark flash on mobile overscroll
+  useEffect(() => {
+    const isLightMode = appMode === "drafter" || appMode === "hands" || appMode === "score" || appMode === "wiki" || appMode === "live";
+    document.body.style.background = isLightMode ? "#faf9f7" : E.bg;
+  }, [appMode, E.bg]);
+
   // Data from backend
   const [allCards, setAllCards] = useState([]);
   const [meta, setMeta] = useState({ gains: [], affects: [], decks: [], types: [], totalCards: 0 });

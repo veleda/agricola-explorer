@@ -161,7 +161,10 @@ ALL_TYPES = sorted({c["type"] for c in ALL_CARDS if c["type"]})
 
 # ── FastAPI app ──────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Agricola Explorer API")
+app = FastAPI(title="Agricola Explorer API",
+              description="Public API for the Agricola board game companion app — card database, draft hands, scores, and more.",
+              version="1.0.0",
+              docs_url=None, redoc_url=None)  # we register docs routes explicitly to avoid SPA catch-all conflict
 
 app.add_middleware(
     CORSMiddleware,
@@ -172,11 +175,13 @@ app.add_middleware(
 
 # ── API routes ───────────────────────────────────────────────────────────────
 
-@app.get("/api/cards")
+@app.get("/api/cards", summary="Full card list",
+         description="Returns the complete list of all Agricola cards as JSON, including stats, image URLs, combos, and deck info.")
 def get_cards():
     return ALL_CARDS
 
-@app.get("/api/meta")
+@app.get("/api/meta", summary="Metadata — decks, types, gains, affects",
+         description="Returns global metadata: available decks, card types, gain/affect labels, and total card count.")
 def get_meta():
     return {
         "gains": ALL_GAINS,
@@ -189,7 +194,8 @@ def get_meta():
 class SparqlRequest(BaseModel):
     query: str
 
-@app.post("/api/sparql")
+@app.post("/api/sparql", summary="Run a SPARQL query",
+          description="Execute a SPARQL query against the Agricola RDF knowledge graph. Returns column names and rows.")
 def run_sparql(req: SparqlRequest):
     t0 = time.perf_counter()
     try:
@@ -475,7 +481,8 @@ class DraftSaveRequest(BaseModel):
 _VALID_DRAFT_TYPES = {"Occupation", "MinorImprovement", "FullCombo"}
 _PICK_COUNTS = {"Occupation": 7, "MinorImprovement": 7, "FullCombo": 14}
 
-@app.post("/api/drafts")
+@app.post("/api/drafts", summary="Save a draft hand",
+          description="Save a completed card draft to the community database.")
 def save_draft(req: DraftSaveRequest):
     if not req.username.strip():
         return JSONResponse(status_code=400, content={"error": "username required"})
@@ -548,7 +555,8 @@ def save_draft(req: DraftSaveRequest):
         "twinUsers": [{"id": r[0], "username": r[1], "timestamp": r[2]} for r in twin_rows],
     }
 
-@app.get("/api/drafts")
+@app.get("/api/drafts", summary="List saved drafts",
+         description="Search and list saved draft hands. Filter by username, card name, or draft type.")
 def list_drafts(username: Optional[str] = None, draftType: Optional[str] = None):
     conn = _get_db()
     query = "SELECT * FROM drafts WHERE 1=1"
@@ -565,7 +573,8 @@ def list_drafts(username: Optional[str] = None, draftType: Optional[str] = None)
     drafts = [_row_to_dict(r) for r in rows]
     return {"drafts": drafts, "total": len(drafts)}
 
-@app.get("/api/drafts/stats")
+@app.get("/api/drafts/stats", summary="Draft statistics",
+         description="Aggregate statistics for saved drafts — total count, unique players, etc.")
 def draft_stats(draftType: Optional[str] = None):
     """Community stats: most popular picks by round."""
     conn = _get_db()
@@ -896,7 +905,8 @@ def delete_challenge(id: str, req: DeleteChallengeRequest):
 _CARD_NAME_MAP: dict[str, str] = {c["name"].lower(): c["id"] for c in ALL_CARDS}
 _CARD_ID_TO_NAME: dict[str, str] = {c["id"]: c["name"] for c in ALL_CARDS}
 
-@app.get("/api/hands")
+@app.get("/api/hands", summary="Browse community hands",
+         description="List saved hands from the community database. Filter by player, card, or draft type.")
 def search_hands(
     q: Optional[str] = None,
     draftType: Optional[str] = None,
@@ -961,7 +971,8 @@ def search_hands(
     }
 
 
-@app.get("/api/hands/twins/{picks_hash}")
+@app.get("/api/hands/twins/{picks_hash}", summary="Find twin hands",
+         description="Find other players who drafted the exact same hand (by picks hash).")
 def get_twins(picks_hash: str):
     """Get all hands with the same picksHash (identical card selections)."""
     conn = _get_db()
@@ -976,7 +987,8 @@ def get_twins(picks_hash: str):
     return {"twins": drafts, "total": len(drafts)}
 
 
-@app.get("/api/hands/popular")
+@app.get("/api/hands/popular", summary="Most popular card picks",
+         description="Returns the most frequently drafted cards across all community hands.")
 def popular_cards(draftType: Optional[str] = None, limit: int = 15):
     """Most popular cards across all community hands, with pick count and percentage."""
     conn = _get_db()
@@ -1026,7 +1038,8 @@ class ScoreSaveRequest(BaseModel):
     total: int
     cardLog: Optional[list] = None  # [{id, name, type, played, order, round, comment}]
 
-@app.post("/api/scores")
+@app.post("/api/scores", summary="Save a game score",
+          description="Record a new Agricola game score with full category breakdown and optional card log.")
 def save_score(req: ScoreSaveRequest):
     if not req.name.strip():
         return JSONResponse(status_code=400, content={"error": "name required"})
@@ -1052,10 +1065,18 @@ def save_score(req: ScoreSaveRequest):
     return {"ok": True, "id": score_id}
 
 
-@app.get("/api/scores")
+@app.get("/api/scores", summary="Search and list scores",
+         description="Search scores by player name or tournament. Results are paginated. "
+                     "Set `pageSize=0` to return ALL scores (no pagination).")
 def list_scores(q: str = "", page: int = 1, pageSize: int = 20):
+    """
+    - **q**: Search term — matches player name or tournament name (case-insensitive, partial match).
+             Leave empty to return all scores.
+    - **page**: Page number (1-based). Ignored when pageSize=0.
+    - **pageSize**: Results per page. Set to 0 to return every score in one response.
+    """
     conn = _get_db()
-    offset = (max(page, 1) - 1) * pageSize
+    return_all = pageSize == 0
 
     if q.strip():
         like = f"%{q.strip()}%"
@@ -1063,16 +1084,29 @@ def list_scores(q: str = "", page: int = 1, pageSize: int = 20):
             "SELECT COUNT(*) FROM scores WHERE name LIKE ? OR tournament LIKE ?",
             (like, like)
         ).fetchone()[0]
-        rows = conn.execute(
-            "SELECT * FROM scores WHERE name LIKE ? OR tournament LIKE ? ORDER BY timestamp DESC LIMIT ? OFFSET ?",
-            (like, like, pageSize, offset)
-        ).fetchall()
+        if return_all:
+            rows = conn.execute(
+                "SELECT * FROM scores WHERE name LIKE ? OR tournament LIKE ? ORDER BY timestamp DESC",
+                (like, like)
+            ).fetchall()
+        else:
+            offset = (max(page, 1) - 1) * pageSize
+            rows = conn.execute(
+                "SELECT * FROM scores WHERE name LIKE ? OR tournament LIKE ? ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+                (like, like, pageSize, offset)
+            ).fetchall()
     else:
         total = conn.execute("SELECT COUNT(*) FROM scores").fetchone()[0]
-        rows = conn.execute(
-            "SELECT * FROM scores ORDER BY timestamp DESC LIMIT ? OFFSET ?",
-            (pageSize, offset)
-        ).fetchall()
+        if return_all:
+            rows = conn.execute(
+                "SELECT * FROM scores ORDER BY timestamp DESC"
+            ).fetchall()
+        else:
+            offset = (max(page, 1) - 1) * pageSize
+            rows = conn.execute(
+                "SELECT * FROM scores ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+                (pageSize, offset)
+            ).fetchall()
 
     scores = []
     for row in rows:
@@ -1083,13 +1117,14 @@ def list_scores(q: str = "", page: int = 1, pageSize: int = 20):
         scores.append(d)
 
     conn.close()
-    return {"scores": scores, "total": total, "page": page, "pageSize": pageSize}
+    return {"scores": scores, "total": total, "page": page, "pageSize": pageSize if not return_all else 0}
 
 
 class ScoreDeleteRequest(BaseModel):
     confirmName: str  # must match the player name on the score
 
-@app.delete("/api/scores/{score_id}")
+@app.delete("/api/scores/{score_id}", summary="Delete a score",
+             description="Delete a score by ID. Requires the player name to confirm.")
 def delete_score(score_id: str, req: ScoreDeleteRequest):
     conn = _get_db()
     row = conn.execute("SELECT name FROM scores WHERE id = ?", (score_id,)).fetchone()
@@ -1109,7 +1144,8 @@ def delete_score(score_id: str, req: ScoreDeleteRequest):
 
 # ── Backup / Restore ─────────────────────────────────────────────────────────
 
-@app.get("/api/export-rdf")
+@app.get("/api/export-rdf", summary="Export RDF knowledge graph",
+         description="Download the complete card knowledge graph as RDF in Turtle format.")
 def export_rdf():
     """Export the full card knowledge graph as Turtle RDF."""
     ttl = model.writes(format="turtle")
@@ -1122,7 +1158,8 @@ def export_rdf():
     )
 
 
-@app.get("/api/backup")
+@app.get("/api/backup", summary="Full data backup",
+         description="Download a JSON backup of all data — scores, drafts, and community hands.")
 def backup_data():
     """Export all drafts and scores as a single JSON download."""
     conn = _get_db()
@@ -2035,7 +2072,8 @@ def _community_combos_for_card(conn, card_id: str) -> list[dict]:
     return results
 
 
-@app.get("/api/wiki/cards/{card_id}")
+@app.get("/api/wiki/cards/{card_id}", summary="Card wiki details",
+         description="Detailed wiki info for a single card — tips, combos, no-build-order suggestions, and community contributions.")
 def wiki_card_detail(card_id: str):
     """Full wiki page data for one card: combos, nobos, tips, hand combos."""
     card = _CARDS_BY_ID_WIKI.get(card_id)
@@ -2155,7 +2193,8 @@ def create_wiki_tip(req: WikiTipRequest):
     return {"ok": True, "id": tip_id}
 
 
-@app.get("/api/wiki/stats")
+@app.get("/api/wiki/stats", summary="Wiki contribution stats",
+         description="Statistics on community wiki contributions — total tips, combos, and no-build-order entries.")
 def wiki_stats():
     """Return combo/nobo/tip counts per card for the wiki list view."""
     conn = _get_db()
@@ -2332,6 +2371,21 @@ if os.path.isdir(IMG_DIR):
 
 if os.path.isdir(DIST_DIR):
     app.mount("/assets", StaticFiles(directory=os.path.join(DIST_DIR, "assets")), name="assets")
+
+    # ── Swagger / OpenAPI docs (registered before SPA catch-all) ────────────
+    from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
+
+    @app.get("/docs", include_in_schema=False)
+    def swagger_docs():
+        return get_swagger_ui_html(openapi_url="/openapi.json", title="Agricola Explorer API — Docs")
+
+    @app.get("/redoc", include_in_schema=False)
+    def redoc_docs():
+        return get_redoc_html(openapi_url="/openapi.json", title="Agricola Explorer API — ReDoc")
+
+    @app.get("/openapi.json", include_in_schema=False)
+    def openapi_json():
+        return app.openapi()
 
     @app.get("/{full_path:path}")
     def serve_spa(full_path: str, request: Request):

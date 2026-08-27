@@ -854,6 +854,40 @@ def build_about_page(total_cards: int, total_decks: int) -> str:
 </section>
 """)
 
+    # Public API
+    parts.append("""
+<section>
+<h2>Public API</h2>
+<div class="entry">
+<p style="margin-bottom:12px">
+  Agricola Explorer exposes a public REST API. You can query cards, scores, drafts, and more
+  programmatically. Full interactive documentation is available via Swagger UI:
+</p>
+
+<table class="props" style="margin-bottom:16px">
+  <tr><td><a href="/docs">API Documentation (Swagger UI)</a></td><td>Interactive docs &mdash; try endpoints directly in the browser</td></tr>
+  <tr><td><a href="/redoc">ReDoc</a></td><td>Alternative read-friendly API reference</td></tr>
+  <tr><td><a href="/openapi.json">OpenAPI Schema</a></td><td>Machine-readable OpenAPI 3 JSON spec</td></tr>
+</table>
+
+<p style="margin-bottom:8px"><strong>Quick examples:</strong></p>
+<pre style="background:var(--code-bg);padding:12px;border-radius:6px;font-size:0.82rem;overflow-x:auto;margin-bottom:8px"># Get all cards
+curl https://agricola.veronahe.no/api/cards
+
+# Search scores by player name
+curl "https://agricola.veronahe.no/api/scores?q=Veronika"
+
+# Get ALL scores (no pagination)
+curl "https://agricola.veronahe.no/api/scores?pageSize=0"
+
+# Run a SPARQL query
+curl -X POST https://agricola.veronahe.no/api/sparql \\
+  -H "Content-Type: application/json" \\
+  -d '{"query": "SELECT ?name WHERE { ?s a :Occupation ; :name ?name } LIMIT 5"}'</pre>
+</div>
+</section>
+""")
+
     # Links
     parts.append("""
 <section>
@@ -908,6 +942,7 @@ def build_about_page(total_cards: int, total_decks: int) -> str:
     parts.append("""
 <footer>
   Agricola Explorer &middot; <a href="/">Back to Explorer</a> &middot; <a href="/ontology">Ontology</a> &middot;
+  <a href="/docs">API Docs</a> &middot;
   <a href="https://github.com/veleda/agricola-explorer" target="_blank" rel="noopener">GitHub</a>
 </footer>
 """)
