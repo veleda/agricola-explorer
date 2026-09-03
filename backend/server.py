@@ -30,7 +30,6 @@ from typing import Optional
 from urllib.parse import unquote
 
 import httpx
-import resend
 from fastapi import FastAPI, Request, Cookie
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, Response, HTMLResponse
@@ -178,12 +177,19 @@ app.add_middleware(
 
 # ── Auth configuration ──────────────────────────────────────────────────────
 
-RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
-APP_URL = os.environ.get("APP_URL", "https://agricola.veronahe.no")
 SESSION_MAX_AGE = 30 * 24 * 3600  # 30 days
 
-if RESEND_API_KEY:
-    resend.api_key = RESEND_API_KEY
+def _hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    h = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 200_000)
+    return f"{salt}${h.hex()}"
+
+def _verify_password(password: str, stored: str) -> bool:
+    try:
+        salt, h = stored.split("$", 1)
+        return hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 200_000).hex() == h
+    except Exception:
+        return False
 
 def _get_current_user(request: Request) -> Optional[dict]:
     """Extract the current user from the session cookie, or return None."""
@@ -192,157 +198,84 @@ def _get_current_user(request: Request) -> Optional[dict]:
         return None
     conn = _get_db()
     row = conn.execute(
-        "SELECT s.userId, u.email, u.username, u.displayName FROM sessions s JOIN users u ON s.userId = u.id WHERE s.token = ? AND s.expiresAt > ?",
+        "SELECT s.userId, u.username, u.displayName FROM sessions s JOIN users u ON s.userId = u.id WHERE s.token = ? AND s.expiresAt > ?",
         (session_token, datetime.datetime.utcnow().isoformat())
     ).fetchone()
     if not row:
         return None
-    return {"id": dict(row)["userId"], "email": dict(row)["email"], "username": dict(row)["username"], "displayName": dict(row)["displayName"]}
+    return {"id": dict(row)["userId"], "username": dict(row)["username"], "displayName": dict(row)["displayName"]}
 
 
-IS_PRODUCTION = bool(RESEND_API_KEY)
+def _auto_claim(conn, user_id: str, username: str):
+    """Link existing anonymous scores/drafts/challenges to a user by username."""
+    conn.execute("UPDATE scores SET userId = ? WHERE userId IS NULL AND name = ? COLLATE NOCASE", (user_id, username))
+    conn.execute("UPDATE drafts SET userId = ? WHERE userId IS NULL AND username = ? COLLATE NOCASE", (user_id, username))
+    conn.execute("UPDATE challenge_attempts SET userId = ? WHERE userId IS NULL AND challengerName = ? COLLATE NOCASE", (user_id, username))
+    conn.commit()
+
+
+def _create_session(conn, user_id: str) -> str:
+    """Create a session token and store it."""
+    session_token = secrets.token_urlsafe(48)
+    session_expires = (datetime.datetime.utcnow() + datetime.timedelta(seconds=SESSION_MAX_AGE)).isoformat()
+    conn.execute("INSERT INTO sessions (token, userId, expiresAt) VALUES (?, ?, ?)", (session_token, user_id, session_expires))
+    conn.commit()
+    return session_token
+
 
 # ── Auth endpoints ──────────────────────────────────────────────────────────
 
-class AuthRequestBody(BaseModel):
-    email: str
-    username: str = ""
+class RegisterBody(BaseModel):
+    username: str
+    password: str
     displayName: str = ""
 
-@app.post("/api/auth/request-link", summary="Request a magic sign-in link",
-          description="Sends a magic link to the given email. If the email is new, username and displayName are required.")
-def request_magic_link(body: AuthRequestBody):
-    email = body.email.strip().lower()
-    if not email or "@" not in email:
-        return JSONResponse({"error": "Invalid email"}, status_code=400)
-    conn = _get_db()
-    existing_user = conn.execute("SELECT id, username FROM users WHERE email = ?", (email,)).fetchone()
-    is_new = existing_user is None
-    if is_new and not body.username.strip():
-        # Tell the frontend to show the username step — don't send an email yet
-        return {"ok": True, "isNew": True}
-    # Check username availability for new users
-    if is_new:
-        uname = body.username.strip()
-        taken = conn.execute("SELECT id FROM users WHERE username = ? COLLATE NOCASE", (uname,)).fetchone()
-        if taken:
-            return JSONResponse({"error": f"Username '{uname}' is already taken"}, status_code=409)
-    # Generate token
-    token = secrets.token_urlsafe(48)
-    expires = (datetime.datetime.utcnow() + datetime.timedelta(minutes=15)).isoformat()
-    conn.execute("INSERT INTO auth_tokens (token, email, expiresAt) VALUES (?, ?, ?)", (token, email, expires))
-    conn.commit()
-    magic_url = f"{APP_URL}?auth_token={token}"
-    # Send email
-    if RESEND_API_KEY:
-        try:
-            resend.Emails.send({
-                "from": "Agricola Explorer <noreply@veronahe.no>",
-                "to": [email],
-                "subject": "Sign in to Agricola Explorer",
-                "html": f"""
-                    <div style="font-family: Inter, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px 20px;">
-                        <h2 style="color: #b45309; margin-bottom: 16px;">Agricola Explorer</h2>
-                        <p>Click the link below to sign in. It expires in 15 minutes.</p>
-                        <a href="{magic_url}" style="display: inline-block; padding: 12px 28px; background: #b45309; color: #fff; text-decoration: none; border-radius: 8px; font-weight: 600; margin: 16px 0;">Sign in</a>
-                        <p style="font-size: 12px; color: #9e9790; margin-top: 20px;">If you didn't request this, just ignore this email.</p>
-                    </div>
-                """,
-            })
-        except Exception as e:
-            print(f"[auth] Resend error: {e}")
-            return JSONResponse({"error": "Failed to send email"}, status_code=500)
-    else:
-        print(f"[auth] Magic link (no Resend key): {magic_url}")
-    return {"ok": True, "isNew": is_new}
+class LoginBody(BaseModel):
+    username: str
+    password: str
 
-
-@app.get("/api/auth/verify", summary="Verify a magic link token",
-         description="Verifies the token from the magic link, creates the user if new, and sets a session cookie.")
-def verify_magic_link(token: str, username: str = "", displayName: str = ""):
+@app.post("/api/auth/register", summary="Create a new account")
+def register(body: RegisterBody):
+    uname = body.username.strip()
+    password = body.password
+    dname = body.displayName.strip() or uname
+    if not uname or len(uname) < 2:
+        return JSONResponse({"error": "Username must be at least 2 characters"}, status_code=400)
+    if len(password) < 4:
+        return JSONResponse({"error": "Password must be at least 4 characters"}, status_code=400)
     conn = _get_db()
-    row = conn.execute("SELECT email, used, expiresAt FROM auth_tokens WHERE token = ?", (token,)).fetchone()
-    if not row:
-        return JSONResponse({"error": "Invalid or expired link"}, status_code=400)
-    row = dict(row)
-    if row["used"]:
-        return JSONResponse({"error": "This link has already been used"}, status_code=400)
-    if row["expiresAt"] < datetime.datetime.utcnow().isoformat():
-        return JSONResponse({"error": "This link has expired"}, status_code=400)
-    email = row["email"]
-    # Mark token as used
-    conn.execute("UPDATE auth_tokens SET used = 1 WHERE token = ?", (token,))
-    # Find or create user
-    user = conn.execute("SELECT id, username, displayName FROM users WHERE email = ?", (email,)).fetchone()
-    if user:
-        user_id = dict(user)["id"]
-    else:
-        # New user — need username
-        uname = username.strip()
-        dname = displayName.strip() or uname
-        if not uname:
-            conn.commit()
-            return JSONResponse({"error": "Username required for new account", "needsUsername": True}, status_code=400)
-        # Check uniqueness
-        taken = conn.execute("SELECT id FROM users WHERE username = ? COLLATE NOCASE", (uname,)).fetchone()
-        if taken:
-            conn.commit()
-            return JSONResponse({"error": f"Username '{uname}' is already taken", "needsUsername": True}, status_code=409)
-        user_id = str(uuid.uuid4())
-        conn.execute(
-            "INSERT INTO users (id, email, username, displayName, createdAt) VALUES (?, ?, ?, ?, ?)",
-            (user_id, email, uname, dname, datetime.datetime.utcnow().isoformat())
-        )
-    # Create session
-    session_token = secrets.token_urlsafe(48)
-    session_expires = (datetime.datetime.utcnow() + datetime.timedelta(seconds=SESSION_MAX_AGE)).isoformat()
-    conn.execute("INSERT INTO sessions (token, userId, expiresAt) VALUES (?, ?, ?)", (session_token, user_id, session_expires))
+    taken = conn.execute("SELECT id FROM users WHERE username = ? COLLATE NOCASE", (uname,)).fetchone()
+    if taken:
+        return JSONResponse({"error": f"Username '{uname}' is already taken"}, status_code=409)
+    user_id = str(uuid.uuid4())
+    pw_hash = _hash_password(password)
+    conn.execute(
+        "INSERT INTO users (id, username, displayName, passwordHash, createdAt) VALUES (?, ?, ?, ?, ?)",
+        (user_id, uname, dname, pw_hash, datetime.datetime.utcnow().isoformat())
+    )
     conn.commit()
-    # Auto-claim: link existing scores/drafts/challenges by username
-    user_row = conn.execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()
-    if user_row:
-        uname = dict(user_row)["username"]
-        conn.execute("UPDATE scores SET userId = ? WHERE userId IS NULL AND name = ? COLLATE NOCASE", (user_id, uname))
-        conn.execute("UPDATE drafts SET userId = ? WHERE userId IS NULL AND username = ? COLLATE NOCASE", (user_id, uname))
-        conn.execute("UPDATE challenge_attempts SET userId = ? WHERE userId IS NULL AND challengerName = ? COLLATE NOCASE", (user_id, uname))
-        conn.commit()
-    # Build response with cookie
-    user_data = conn.execute("SELECT id, email, username, displayName FROM users WHERE id = ?", (user_id,)).fetchone()
+    _auto_claim(conn, user_id, uname)
+    session_token = _create_session(conn, user_id)
+    user_data = conn.execute("SELECT id, username, displayName FROM users WHERE id = ?", (user_id,)).fetchone()
     resp = JSONResponse({"ok": True, "user": dict(user_data)})
-    resp.set_cookie("agricola_session", session_token, max_age=SESSION_MAX_AGE, httponly=True, samesite="lax", secure=IS_PRODUCTION)
+    resp.set_cookie("agricola_session", session_token, max_age=SESSION_MAX_AGE, httponly=True, samesite="lax", secure=False)
     return resp
 
-
-@app.post("/api/auth/dev-login", summary="Dev-only: create and log in a test user",
-          description="Only works when RESEND_API_KEY is not set (i.e. local dev).")
-def dev_login(body: AuthRequestBody):
-    if RESEND_API_KEY:
-        return JSONResponse({"error": "Dev login disabled in production"}, status_code=403)
-    email = body.email.strip().lower() or "test@localhost"
-    uname = body.username.strip() or "TestUser"
-    dname = body.displayName.strip() if body.displayName else uname
+@app.post("/api/auth/login", summary="Sign in with username and password")
+def login(body: LoginBody):
+    uname = body.username.strip()
+    password = body.password
+    if not uname or not password:
+        return JSONResponse({"error": "Username and password required"}, status_code=400)
     conn = _get_db()
-    user = conn.execute("SELECT id, username, displayName FROM users WHERE email = ?", (email,)).fetchone()
-    if user:
-        user_id = dict(user)["id"]
-    else:
-        user_id = str(uuid.uuid4())
-        conn.execute(
-            "INSERT INTO users (id, email, username, displayName, createdAt) VALUES (?, ?, ?, ?, ?)",
-            (user_id, email, uname, dname, datetime.datetime.utcnow().isoformat())
-        )
-    # Create session
-    session_token = secrets.token_urlsafe(48)
-    session_expires = (datetime.datetime.utcnow() + datetime.timedelta(seconds=SESSION_MAX_AGE)).isoformat()
-    conn.execute("INSERT INTO sessions (token, userId, expiresAt) VALUES (?, ?, ?)", (session_token, user_id, session_expires))
-    conn.commit()
-    # Auto-claim
-    conn.execute("UPDATE scores SET userId = ? WHERE userId IS NULL AND name = ? COLLATE NOCASE", (user_id, uname))
-    conn.execute("UPDATE drafts SET userId = ? WHERE userId IS NULL AND username = ? COLLATE NOCASE", (user_id, uname))
-    conn.execute("UPDATE challenge_attempts SET userId = ? WHERE userId IS NULL AND challengerName = ? COLLATE NOCASE", (user_id, uname))
-    conn.commit()
-    user_data = conn.execute("SELECT id, email, username, displayName FROM users WHERE id = ?", (user_id,)).fetchone()
-    resp = JSONResponse({"ok": True, "user": dict(user_data)})
+    row = conn.execute("SELECT id, username, displayName, passwordHash FROM users WHERE username = ? COLLATE NOCASE", (uname,)).fetchone()
+    if not row:
+        return JSONResponse({"error": "Invalid username or password"}, status_code=401)
+    user = dict(row)
+    if not user.get("passwordHash") or not _verify_password(password, user["passwordHash"]):
+        return JSONResponse({"error": "Invalid username or password"}, status_code=401)
+    session_token = _create_session(conn, user["id"])
+    resp = JSONResponse({"ok": True, "user": {"id": user["id"], "username": user["username"], "displayName": user["displayName"]}})
     resp.set_cookie("agricola_session", session_token, max_age=SESSION_MAX_AGE, httponly=True, samesite="lax", secure=False)
     return resp
 
@@ -784,19 +717,11 @@ def _get_db() -> sqlite3.Connection:
     # ── Users & auth tables ──────────────────────────────────────────────────
     conn.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            id          TEXT PRIMARY KEY,
-            email       TEXT NOT NULL UNIQUE,
-            username    TEXT NOT NULL UNIQUE,
-            displayName TEXT NOT NULL,
-            createdAt   TEXT NOT NULL
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS auth_tokens (
-            token       TEXT PRIMARY KEY,
-            email       TEXT NOT NULL,
-            expiresAt   TEXT NOT NULL,
-            used        INTEGER NOT NULL DEFAULT 0
+            id           TEXT PRIMARY KEY,
+            username     TEXT NOT NULL UNIQUE,
+            displayName  TEXT NOT NULL,
+            passwordHash TEXT NOT NULL,
+            createdAt    TEXT NOT NULL
         )
     """)
     conn.execute("""
