@@ -441,6 +441,538 @@ function ScoreBrowser({ onClose }) {
   );
 }
 
+// ── Tournament Analytics ────────────────────────────────────────────────────
+function TournamentAnalytics({ onClose }) {
+  const isMobile = useIsMobile();
+  const [query, setQuery] = useState("");
+  const [allScores, setAllScores] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [tournaments, setTournaments] = useState([]);
+  const [selectedTournament, setSelectedTournament] = useState(null);
+
+  // Load all scores once
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/scores?pageSize=0`);
+        const data = await res.json();
+        setAllScores(data.scores || []);
+      } catch (e) {
+        console.error("Failed to load scores:", e);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  // Extract unique tournaments
+  useEffect(() => {
+    const tMap = {};
+    for (const s of allScores) {
+      const t = s.tournament?.trim();
+      if (t) {
+        if (!tMap[t]) tMap[t] = [];
+        tMap[t].push(s);
+      }
+    }
+    const list = Object.entries(tMap)
+      .map(([name, scores]) => ({ name, count: scores.length }))
+      .sort((a, b) => b.count - a.count);
+    setTournaments(list);
+  }, [allScores]);
+
+  // Filter tournaments by query
+  const filteredTournaments = useMemo(() => {
+    if (!query.trim()) return tournaments;
+    const q = query.toLowerCase();
+    return tournaments.filter(t => t.name.toLowerCase().includes(q));
+  }, [tournaments, query]);
+
+  // Get scores for selected tournament
+  const scores = useMemo(() => {
+    if (!selectedTournament) return [];
+    return allScores.filter(s => s.tournament?.trim() === selectedTournament);
+  }, [allScores, selectedTournament]);
+
+  // ── Analytics calculations ──
+  const analytics = useMemo(() => {
+    if (scores.length === 0) return null;
+
+    // Leaderboard: best score per player, sorted desc
+    const playerBest = {};
+    const playerAll = {};
+    for (const s of scores) {
+      const n = s.name;
+      if (!playerBest[n] || s.total > playerBest[n].total) playerBest[n] = s;
+      if (!playerAll[n]) playerAll[n] = [];
+      playerAll[n].push(s);
+    }
+    const leaderboard = Object.entries(playerAll).map(([name, games]) => ({
+      name,
+      best: Math.max(...games.map(g => g.total)),
+      avg: Math.round(games.map(g => g.total).reduce((a, b) => a + b, 0) / games.length * 10) / 10,
+      games: games.length,
+    })).sort((a, b) => b.best - a.best);
+
+    // Score distribution (buckets of 5)
+    const totals = scores.map(s => s.total);
+    const minScore = Math.min(...totals);
+    const maxScore = Math.max(...totals);
+    const bucketSize = 5;
+    const bucketStart = Math.floor(minScore / bucketSize) * bucketSize;
+    const bucketEnd = Math.ceil((maxScore + 1) / bucketSize) * bucketSize;
+    const distribution = [];
+    for (let b = bucketStart; b < bucketEnd; b += bucketSize) {
+      const count = totals.filter(t => t >= b && t < b + bucketSize).length;
+      distribution.push({ label: `${b}–${b + bucketSize - 1}`, count });
+    }
+
+    // Category averages
+    const catSums = {};
+    const catCounts = {};
+    for (const cat of CATEGORIES) {
+      catSums[cat.key] = 0;
+      catCounts[cat.key] = 0;
+    }
+    for (const s of scores) {
+      for (const cat of CATEGORIES) {
+        const pts = s.points?.[cat.key];
+        if (pts !== undefined && pts !== null) {
+          catSums[cat.key] += pts;
+          catCounts[cat.key]++;
+        }
+      }
+    }
+    const categoryAvg = CATEGORIES.map(cat => ({
+      ...cat,
+      avg: catCounts[cat.key] > 0 ? Math.round(catSums[cat.key] / catCounts[cat.key] * 10) / 10 : null,
+    }));
+
+    // Group averages
+    const groupSums = {};
+    for (const s of scores) {
+      for (const cat of CATEGORIES) {
+        const g = cat.group;
+        if (!groupSums[g]) groupSums[g] = { sum: 0, count: 0 };
+        const pts = s.points?.[cat.key];
+        if (pts !== undefined && pts !== null) {
+          groupSums[g].sum += pts;
+          groupSums[g].count++;
+        }
+      }
+    }
+    const groupAvg = GROUP_ORDER.map(g => ({
+      group: g,
+      label: GROUP_LABELS[g],
+      avg: groupSums[g]?.count > 0 ? Math.round(groupSums[g].sum / groupSums[g].count * 10) / 10 : null,
+    }));
+
+    // Starting position analysis
+    const posBuckets = {};
+    for (const s of scores) {
+      const pos = s.startingPosition?.trim();
+      if (pos) {
+        if (!posBuckets[pos]) posBuckets[pos] = [];
+        posBuckets[pos].push(s.total);
+      }
+    }
+    const positionStats = Object.entries(posBuckets)
+      .map(([pos, totals]) => ({
+        position: pos,
+        avg: Math.round(totals.reduce((a, b) => a + b, 0) / totals.length * 10) / 10,
+        count: totals.length,
+        best: Math.max(...totals),
+      }))
+      .sort((a, b) => Number(a.position) - Number(b.position));
+
+    // Score trends (by timestamp order)
+    const sorted = [...scores].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    const trends = sorted.map((s, i) => ({
+      label: new Date(s.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+      name: s.name,
+      total: s.total,
+      index: i,
+    }));
+
+    return {
+      leaderboard,
+      distribution,
+      categoryAvg,
+      groupAvg,
+      positionStats,
+      trends,
+      totalGames: scores.length,
+      totalPlayers: leaderboard.length,
+      avgScore: Math.round(totals.reduce((a, b) => a + b, 0) / totals.length * 10) / 10,
+      highScore: maxScore,
+      lowScore: minScore,
+    };
+  }, [scores]);
+
+  // Helper: simple bar chart
+  const Bar = ({ value, max, color = T.accent }) => (
+    <div style={{ flex: 1, height: 18, background: T.surfaceAlt, borderRadius: 4, overflow: "hidden" }}>
+      <div style={{
+        height: "100%", borderRadius: 4,
+        width: max > 0 ? `${Math.max(2, (value / max) * 100)}%` : "0%",
+        background: color, transition: "width 0.3s ease",
+      }} />
+    </div>
+  );
+
+  // ── Tournament selector view ──
+  if (!selectedTournament) {
+    return (
+      <div style={{ height: "100%", overflow: "auto", background: T.bg, fontFamily: "Inter, system-ui, sans-serif" }}>
+        <div style={{ maxWidth: 520, margin: "0 auto", padding: "32px 20px 48px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
+            <div>
+              <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: -0.5, color: T.text }}>
+                Tournament Analytics
+              </div>
+              <div style={{ fontSize: 13, color: T.textMuted, marginTop: 4 }}>
+                Select a tournament to view statistics
+              </div>
+            </div>
+            <button onClick={onClose} style={{
+              padding: "8px 16px", borderRadius: 8, border: `1px solid ${T.border}`,
+              background: T.surface, color: T.textSecondary, fontSize: 13, fontWeight: 500,
+              cursor: "pointer",
+            }}>Back</button>
+          </div>
+
+          {/* Search */}
+          <input
+            type="text" value={query} onChange={e => setQuery(e.target.value)}
+            placeholder="Search tournaments..."
+            style={{
+              width: "100%", padding: "10px 14px", borderRadius: 10,
+              border: `1.5px solid ${T.border}`, background: T.surface,
+              fontSize: 14, color: T.text, outline: "none", marginBottom: 16,
+              boxSizing: "border-box",
+            }}
+            onFocus={e => e.target.style.borderColor = T.accent}
+            onBlur={e => e.target.style.borderColor = T.border}
+          />
+
+          {loading ? (
+            <div style={{ textAlign: "center", padding: 40, color: T.textMuted, fontSize: 13 }}>Loading scores...</div>
+          ) : filteredTournaments.length === 0 ? (
+            <div style={{ textAlign: "center", padding: 40, color: T.textMuted }}>
+              <div style={{ fontSize: 32, marginBottom: 8 }}>🏆</div>
+              <div style={{ fontSize: 14 }}>{query ? "No tournaments match your search" : "No tournament scores saved yet"}</div>
+              <div style={{ fontSize: 12, marginTop: 4 }}>Save scores with a tournament name to see analytics here</div>
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {/* Show "All scores" option */}
+              <button onClick={() => setSelectedTournament("__ALL__")} style={{
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                padding: "14px 16px", borderRadius: 12, border: `1.5px solid ${T.accent}40`,
+                background: T.accentBg, cursor: "pointer", textAlign: "left", width: "100%",
+              }}>
+                <div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: T.accent }}>All Scores</div>
+                  <div style={{ fontSize: 11, color: T.textMuted, marginTop: 2 }}>Combined statistics across all tournaments</div>
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: T.accent }}>{allScores.length}</div>
+              </button>
+
+              {filteredTournaments.map(t => (
+                <button key={t.name} onClick={() => setSelectedTournament(t.name)} style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  padding: "14px 16px", borderRadius: 12, border: `1px solid ${T.border}`,
+                  background: T.surface, cursor: "pointer", textAlign: "left", width: "100%",
+                  transition: "all 0.15s",
+                }}
+                  onMouseEnter={e => e.currentTarget.style.background = T.surfaceAlt}
+                  onMouseLeave={e => e.currentTarget.style.background = T.surface}
+                >
+                  <div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>{t.name}</div>
+                    <div style={{ fontSize: 11, color: T.textMuted, marginTop: 2 }}>{t.count} game{t.count !== 1 ? "s" : ""} recorded</div>
+                  </div>
+                  <span style={{ fontSize: 14, color: T.textMuted }}>▸</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ── "All scores" mode ──
+  const displayScores = selectedTournament === "__ALL__" ? allScores : scores;
+  const displayTitle = selectedTournament === "__ALL__" ? "All Scores" : selectedTournament;
+
+  // Recalculate analytics for "all" case
+  const displayAnalytics = useMemo(() => {
+    const sc = displayScores;
+    if (sc.length === 0) return null;
+
+    const playerAll = {};
+    for (const s of sc) {
+      const n = s.name;
+      if (!playerAll[n]) playerAll[n] = [];
+      playerAll[n].push(s);
+    }
+    const leaderboard = Object.entries(playerAll).map(([name, games]) => ({
+      name,
+      best: Math.max(...games.map(g => g.total)),
+      avg: Math.round(games.map(g => g.total).reduce((a, b) => a + b, 0) / games.length * 10) / 10,
+      games: games.length,
+    })).sort((a, b) => b.best - a.best);
+
+    const totals = sc.map(s => s.total);
+    const minScore = Math.min(...totals);
+    const maxScore = Math.max(...totals);
+    const bucketSize = 5;
+    const bucketStart = Math.floor(minScore / bucketSize) * bucketSize;
+    const bucketEnd = Math.ceil((maxScore + 1) / bucketSize) * bucketSize;
+    const distribution = [];
+    for (let b = bucketStart; b < bucketEnd; b += bucketSize) {
+      distribution.push({ label: `${b}–${b + bucketSize - 1}`, count: totals.filter(t => t >= b && t < b + bucketSize).length });
+    }
+
+    const catSums = {};
+    const catCounts = {};
+    for (const cat of CATEGORIES) { catSums[cat.key] = 0; catCounts[cat.key] = 0; }
+    for (const s of sc) {
+      for (const cat of CATEGORIES) {
+        const pts = s.points?.[cat.key];
+        if (pts !== undefined && pts !== null) { catSums[cat.key] += pts; catCounts[cat.key]++; }
+      }
+    }
+    const categoryAvg = CATEGORIES.map(cat => ({
+      ...cat,
+      avg: catCounts[cat.key] > 0 ? Math.round(catSums[cat.key] / catCounts[cat.key] * 10) / 10 : null,
+    }));
+
+    const groupSums = {};
+    for (const s of sc) {
+      for (const cat of CATEGORIES) {
+        const g = cat.group;
+        if (!groupSums[g]) groupSums[g] = { sum: 0, count: 0 };
+        const pts = s.points?.[cat.key];
+        if (pts !== undefined && pts !== null) { groupSums[g].sum += pts; groupSums[g].count++; }
+      }
+    }
+    const groupAvg = GROUP_ORDER.map(g => ({
+      group: g, label: GROUP_LABELS[g],
+      avg: groupSums[g]?.count > 0 ? Math.round(groupSums[g].sum / groupSums[g].count * 10) / 10 : null,
+    }));
+
+    const posBuckets = {};
+    for (const s of sc) {
+      const pos = s.startingPosition?.trim();
+      if (pos) { if (!posBuckets[pos]) posBuckets[pos] = []; posBuckets[pos].push(s.total); }
+    }
+    const positionStats = Object.entries(posBuckets)
+      .map(([pos, tots]) => ({ position: pos, avg: Math.round(tots.reduce((a, b) => a + b, 0) / tots.length * 10) / 10, count: tots.length, best: Math.max(...tots) }))
+      .sort((a, b) => Number(a.position) - Number(b.position));
+
+    const sorted = [...sc].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    const trends = sorted.map((s, i) => ({
+      label: new Date(s.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+      name: s.name, total: s.total, index: i,
+    }));
+
+    return {
+      leaderboard, distribution, categoryAvg, groupAvg, positionStats, trends,
+      totalGames: sc.length, totalPlayers: leaderboard.length,
+      avgScore: Math.round(totals.reduce((a, b) => a + b, 0) / totals.length * 10) / 10,
+      highScore: maxScore, lowScore: minScore,
+    };
+  }, [displayScores]);
+
+  const a = selectedTournament === "__ALL__" ? displayAnalytics : analytics;
+  if (!a) return null;
+
+  const maxDist = Math.max(...a.distribution.map(d => d.count), 1);
+  const maxGroupAvg = Math.max(...a.groupAvg.filter(g => g.avg !== null).map(g => Math.abs(g.avg)), 1);
+
+  const SectionCard = ({ title, children }) => (
+    <div style={{ background: T.surface, borderRadius: 14, border: `1px solid ${T.border}`, padding: "16px 18px", marginBottom: 12 }}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: T.text, marginBottom: 12, textTransform: "uppercase", letterSpacing: 0.5 }}>
+        {title}
+      </div>
+      {children}
+    </div>
+  );
+
+  // ── Dashboard view ──
+  return (
+    <div style={{ height: "100%", overflow: "auto", background: T.bg, fontFamily: "Inter, system-ui, sans-serif" }}>
+      <div style={{ maxWidth: 520, margin: "0 auto", padding: "32px 20px 48px" }}>
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 24 }}>
+          <button onClick={() => setSelectedTournament(null)} style={{
+            padding: "6px 12px", borderRadius: 8, border: `1px solid ${T.border}`,
+            background: T.surface, color: T.textSecondary, fontSize: 12, cursor: "pointer",
+          }}>← Back</button>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: -0.5, color: T.text }}>{displayTitle}</div>
+            <div style={{ fontSize: 12, color: T.textMuted, marginTop: 2 }}>
+              {a.totalGames} games · {a.totalPlayers} players · avg {a.avgScore} pts
+            </div>
+          </div>
+          <button onClick={onClose} style={{
+            padding: "6px 12px", borderRadius: 8, border: `1px solid ${T.border}`,
+            background: T.surface, color: T.textSecondary, fontSize: 12, cursor: "pointer",
+          }}>Close</button>
+        </div>
+
+        {/* Quick stats */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 16 }}>
+          {[
+            { label: "High", value: a.highScore, color: T.green },
+            { label: "Average", value: a.avgScore, color: T.accent },
+            { label: "Low", value: a.lowScore, color: T.red },
+          ].map(s => (
+            <div key={s.label} style={{
+              background: T.surface, borderRadius: 12, border: `1px solid ${T.border}`,
+              padding: "12px 10px", textAlign: "center",
+            }}>
+              <div style={{ fontSize: 24, fontWeight: 800, color: s.color, letterSpacing: -0.5 }}>{s.value}</div>
+              <div style={{ fontSize: 10, color: T.textMuted, marginTop: 2, textTransform: "uppercase", letterSpacing: 0.5 }}>{s.label}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Leaderboard */}
+        <SectionCard title="🏆 Leaderboard">
+          {a.leaderboard.map((p, i) => (
+            <div key={p.name} style={{
+              display: "flex", alignItems: "center", gap: 10, padding: "8px 0",
+              borderBottom: i < a.leaderboard.length - 1 ? `1px solid ${T.borderLight}` : "none",
+            }}>
+              <div style={{
+                width: 26, height: 26, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 12, fontWeight: 700,
+                background: i === 0 ? "#fef3c7" : i === 1 ? "#f1f5f9" : i === 2 ? "#fef2e8" : T.surfaceAlt,
+                color: i === 0 ? "#b45309" : i === 1 ? "#64748b" : i === 2 ? "#c2410c" : T.textMuted,
+              }}>{i + 1}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: T.text }}>{p.name}</div>
+                <div style={{ fontSize: 10, color: T.textMuted }}>{p.games} game{p.games !== 1 ? "s" : ""} · avg {p.avg}</div>
+              </div>
+              <div style={{ fontSize: 20, fontWeight: 800, color: T.accent, letterSpacing: -0.5 }}>{p.best}</div>
+            </div>
+          ))}
+        </SectionCard>
+
+        {/* Score distribution */}
+        <SectionCard title="📊 Score Distribution">
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {a.distribution.map(d => (
+              <div key={d.label} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ width: 56, fontSize: 11, color: T.textMuted, textAlign: "right", flexShrink: 0 }}>{d.label}</div>
+                <Bar value={d.count} max={maxDist} />
+                <div style={{ width: 20, fontSize: 11, fontWeight: 600, color: T.text, textAlign: "right" }}>{d.count}</div>
+              </div>
+            ))}
+          </div>
+        </SectionCard>
+
+        {/* Category breakdown */}
+        <SectionCard title="📋 Category Averages">
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {a.groupAvg.filter(g => g.avg !== null).map(g => (
+              <div key={g.group} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ width: 72, fontSize: 12, color: T.textSecondary, fontWeight: 500 }}>{g.label}</div>
+                <Bar value={Math.abs(g.avg)} max={maxGroupAvg} color={g.avg >= 0 ? T.green : T.red} />
+                <div style={{
+                  width: 36, fontSize: 12, fontWeight: 700, textAlign: "right",
+                  color: g.avg >= 0 ? T.green : T.red,
+                }}>{g.avg > 0 ? "+" : ""}{g.avg}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ borderTop: `1px solid ${T.borderLight}`, marginTop: 12, paddingTop: 12 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>
+              Per category
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 16px" }}>
+              {a.categoryAvg.filter(c => c.avg !== null).map(c => (
+                <div key={c.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, padding: "2px 0" }}>
+                  <span style={{ color: T.textSecondary }}>{c.icon} {c.label}</span>
+                  <span style={{ fontWeight: 600, color: c.avg >= 0 ? T.green : T.red }}>{c.avg > 0 ? "+" : ""}{c.avg}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </SectionCard>
+
+        {/* Starting position */}
+        {a.positionStats.length > 0 && (
+          <SectionCard title="🎯 Starting Position">
+            <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(a.positionStats.length, 5)}, 1fr)`, gap: 8 }}>
+              {a.positionStats.map(p => (
+                <div key={p.position} style={{
+                  background: T.surfaceAlt, borderRadius: 10, padding: "10px 8px", textAlign: "center",
+                }}>
+                  <div style={{ fontSize: 10, color: T.textMuted, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>Pos {p.position}</div>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: T.accent }}>{p.avg}</div>
+                  <div style={{ fontSize: 10, color: T.textMuted, marginTop: 2 }}>avg · {p.count}g</div>
+                  <div style={{ fontSize: 10, color: T.green, fontWeight: 600 }}>best {p.best}</div>
+                </div>
+              ))}
+            </div>
+          </SectionCard>
+        )}
+
+        {/* Score trend */}
+        {a.trends.length > 1 && (
+          <SectionCard title="📈 Score Trend">
+            {(() => {
+              const vals = a.trends.map(t => t.total);
+              const min = Math.min(...vals);
+              const max = Math.max(...vals);
+              const range = max - min || 1;
+              const h = 120;
+              const w = Math.max(a.trends.length * 24, 280);
+              const points = a.trends.map((t, i) => {
+                const x = (i / (a.trends.length - 1)) * (w - 20) + 10;
+                const y = h - 10 - ((t.total - min) / range) * (h - 20);
+                return { x, y, ...t };
+              });
+              const line = points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ");
+              return (
+                <div style={{ overflowX: "auto" }}>
+                  <svg viewBox={`0 0 ${w} ${h}`} style={{ width: w, height: h, display: "block" }}>
+                    {/* Grid lines */}
+                    {[0, 0.25, 0.5, 0.75, 1].map(frac => {
+                      const y = h - 10 - frac * (h - 20);
+                      const val = Math.round(min + frac * range);
+                      return (
+                        <g key={frac}>
+                          <line x1={10} y1={y} x2={w - 10} y2={y} stroke={T.borderLight} strokeWidth={1} />
+                          <text x={4} y={y + 3} fontSize={8} fill={T.textMuted}>{val}</text>
+                        </g>
+                      );
+                    })}
+                    {/* Line */}
+                    <path d={line} fill="none" stroke={T.accent} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+                    {/* Dots */}
+                    {points.map((p, i) => (
+                      <g key={i}>
+                        <circle cx={p.x} cy={p.y} r={4} fill={T.accent} stroke={T.surface} strokeWidth={2} />
+                        <title>{p.name}: {p.total} pts ({p.label})</title>
+                      </g>
+                    ))}
+                  </svg>
+                </div>
+              );
+            })()}
+          </SectionCard>
+        )}
+
+      </div>
+    </div>
+  );
+}
+
 // ── Stepper button for mobile ────────────────────────────────────────────────
 function StepperBtn({ direction, onClick }) {
   const isMinus = direction === "minus";
@@ -478,6 +1010,7 @@ export default function ScoreSheet({ allCards = [] }) {
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState(null); // {type: "ok"|"err", text}
   const [showBrowser, setShowBrowser] = useState(false);
+  const [showAnalytics, setShowAnalytics] = useState(false);
 
   // ── Card log state ──────────────────────────────────────────────────────
   const [showCardLog, setShowCardLog] = useState(false);
@@ -707,6 +1240,10 @@ export default function ScoreSheet({ allCards = [] }) {
     }
     return GROUP_ORDER.map(g => ({ group: g, label: GROUP_LABELS[g], items: map[g] || [] }));
   }, []);
+
+  if (showAnalytics) {
+    return <TournamentAnalytics onClose={() => setShowAnalytics(false)} />;
+  }
 
   return (
     <div style={{
@@ -1373,6 +1910,18 @@ export default function ScoreSheet({ allCards = [] }) {
             onMouseLeave={e => { if (!showBrowser) e.target.style.background = T.surface; }}
           >
             Browse Scores
+          </button>
+          <button onClick={() => setShowAnalytics(true)}
+            style={{
+              padding: "9px 24px", borderRadius: 8,
+              border: `1px solid ${T.border}`, background: T.surface,
+              color: T.textSecondary,
+              fontSize: 13, fontWeight: 500, cursor: "pointer", transition: "all 0.15s",
+            }}
+            onMouseEnter={e => { e.target.style.background = T.surfaceAlt; }}
+            onMouseLeave={e => { e.target.style.background = T.surface; }}
+          >
+            📊 Analytics
           </button>
         </div>
 
