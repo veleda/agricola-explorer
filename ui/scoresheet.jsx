@@ -595,7 +595,7 @@ function TournamentAnalytics({ onClose }) {
   // ── Tournament selector view ──
   if (!selectedTournament) {
     return (
-      <div style={{ height: "100%", overflow: "auto", background: T.bg, fontFamily: "Inter, system-ui, sans-serif" }}>
+      <div style={{ height: "100%", overflowX: "hidden", overflowY: "auto", overscrollBehavior: "contain", background: T.bg, fontFamily: "Inter, system-ui, sans-serif" }}>
         <div style={{ maxWidth: 520, margin: "0 auto", padding: "32px 20px 48px" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
             <div>
@@ -691,7 +691,7 @@ function TournamentAnalytics({ onClose }) {
 
   // ── Dashboard view ──
   return (
-    <div style={{ height: "100%", overflow: "auto", background: T.bg, fontFamily: "Inter, system-ui, sans-serif" }}>
+    <div style={{ height: "100%", overflowX: "hidden", overflowY: "auto", overscrollBehavior: "contain", background: T.bg, fontFamily: "Inter, system-ui, sans-serif" }}>
       <div style={{ maxWidth: 520, margin: "0 auto", padding: "32px 20px 48px" }}>
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 24 }}>
@@ -1135,7 +1135,7 @@ export default function ScoreSheet({ allCards = [] }) {
 
   return (
     <div style={{
-      height: "100%", overflow: "auto",
+      height: "100%", overflowX: "hidden", overflowY: "auto", overscrollBehavior: "contain",
       background: T.bg, fontFamily: "Inter, system-ui, sans-serif",
     }}>
       <div style={{

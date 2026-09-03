@@ -1510,7 +1510,7 @@ export default function App() {
 
     if (appMode === "drafter" || appMode === "hands" || appMode === "score" || appMode === "wiki" || appMode === "live") {
       return (
-        <div style={{ display: "flex", flexDirection: "column", height: "100dvh", background: E.bg, color: E.textSecondary, fontFamily: "Inter, system-ui, sans-serif" }}>
+        <div style={{ display: "flex", flexDirection: "column", height: "100dvh", width: "100%", overflow: "hidden", background: E.bg, color: E.textSecondary, fontFamily: "Inter, system-ui, sans-serif" }}>
           {/* Mobile drafter/hands/score/wiki header */}
           <div style={{
             display: "flex", alignItems: "center", padding: "10px 12px",
@@ -1537,7 +1537,7 @@ export default function App() {
     }
 
     return (
-      <div style={{ display: "flex", flexDirection: "column", height: "100dvh", background: E.bg, color: E.textSecondary, fontFamily: "Inter, system-ui, sans-serif" }}>
+      <div style={{ display: "flex", flexDirection: "column", height: "100dvh", width: "100%", overflow: "hidden", background: E.bg, color: E.textSecondary, fontFamily: "Inter, system-ui, sans-serif" }}>
 
         {/* Mobile header */}
         <div style={{
