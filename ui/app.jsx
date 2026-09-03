@@ -5,6 +5,8 @@ import CommunityHands from "./hands.jsx";
 import ScoreSheet from "./scoresheet.jsx";
 import CardWiki from "./wiki.jsx";
 import LiveGame from "./livegame.jsx";
+import ProfilePage from "./profile.jsx";
+import { AuthProvider, useAuth, SignInModal } from "./auth.jsx";
 
 // ── API helpers ─────────────────────────────────────────────────────────────
 const API_BASE = "";  // same origin in production; Vite proxy in dev
@@ -689,6 +691,49 @@ function GalleryView({ cards, onSelectCard, selectedId, themeE }) {
   );
 }
 
+function FavButton({ cardId, themeE }) {
+  const { user } = useAuth();
+  const [isFav, setIsFav] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!user) { setIsFav(false); return; }
+    fetch(`${API_BASE}/api/me/favourites`, { credentials: "include" })
+      .then(r => r.json())
+      .then(favs => setIsFav((favs || []).some(f => f.cardId === cardId)))
+      .catch(() => {});
+  }, [user, cardId]);
+
+  if (!user) return null;
+
+  const toggle = async () => {
+    if (loading) return;
+    setLoading(true);
+    try {
+      if (isFav) {
+        await fetch(`${API_BASE}/api/me/favourites/${cardId}`, { method: "DELETE", credentials: "include" });
+        setIsFav(false);
+      } else {
+        await fetch(`${API_BASE}/api/me/favourites`, {
+          method: "POST", credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cardId, notes: "" }),
+        });
+        setIsFav(true);
+      }
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  };
+
+  return (
+    <button onClick={toggle} title={isFav ? "Remove from favourites" : "Add to favourites"}
+      style={{
+        background: "none", border: "none", fontSize: 18, cursor: "pointer", padding: 2,
+        color: isFav ? "#ef4444" : (themeE?.textDim || "#999"), transition: "all 0.15s",
+      }}>{isFav ? "❤️" : "🩶"}</button>
+  );
+}
+
 function CardDetail({ card, onClose, onFilterGain, onFilterAffect, onFilterPrereq, onSelectCardByName, onViewInWiki, themeE }) {
   if (!card) return (
     <div style={{ padding: 24, color: themeE.textDim, fontSize: 13, textAlign: "center" }}>
@@ -709,13 +754,14 @@ function CardDetail({ card, onClose, onFilterGain, onFilterAffect, onFilterPrere
       )}
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
         <span style={{ fontSize: 22 }}>{TYPE_ICONS[card.type]}</span>
-        <div>
+        <div style={{ flex: 1 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: themeE.text }}>{card.name}</div>
           <div style={{ fontSize: 11, color: themeE.textMuted }}>
             {card.type.replace(/([A-Z])/g, " $1").trim()} · Deck {card.deck}
             {card.banned && <span style={{ marginLeft: 6, color: "#dc2626", fontWeight: 600 }}>BANNED</span>}
           </div>
         </div>
+        <FavButton cardId={card.id} themeE={themeE} />
       </div>
 
       {imgSrc && (
@@ -991,6 +1037,8 @@ export default function App() {
   const [explorerTheme, setExplorerTheme] = useState("light");
   const [backupOpen, setBackupOpen] = useState(false);
   const [backupMsg, setBackupMsg] = useState(null); // {text, type}
+  const [showSignIn, setShowSignIn] = useState(false);
+  const { user } = useAuth();
   const restoreFileRef = useRef(null);
 
   // Auto-collapse sidebar when entering drafter/hands, expand when returning to explorer
@@ -1075,7 +1123,7 @@ export default function App() {
 
   // Sync body background to prevent dark flash on mobile overscroll
   useEffect(() => {
-    const isLightMode = appMode === "drafter" || appMode === "hands" || appMode === "score" || appMode === "wiki" || appMode === "live";
+    const isLightMode = appMode === "drafter" || appMode === "hands" || appMode === "score" || appMode === "wiki" || appMode === "live" || appMode === "profile";
     document.body.style.background = isLightMode ? "#faf9f7" : E.bg;
   }, [appMode, E.bg]);
 
@@ -1404,6 +1452,7 @@ export default function App() {
       { mode: "score", emoji: "\uD83D\uDCCB", label: "Score" },
       { mode: "wiki", emoji: "\uD83D\uDCD6", label: "Wiki" },
       { mode: "live", emoji: "\uD83C\uDFAF", label: "Live" },
+      ...(user ? [{ mode: "profile", emoji: "\uD83D\uDC64", label: "Me" }] : []),
     ];
     const mobileModeSwitcher = (
       <div style={{ display: "flex", gap: 3, background: E.surface, borderRadius: 8, padding: 2, border: `1px solid ${E.border}` }}>
@@ -1500,15 +1549,37 @@ export default function App() {
             </div>
           </div>
 
+          {/* Sign in / Profile button */}
+          <div style={{ position: "relative", zIndex: 2, textAlign: "center", padding: "10px 20px" }}>
+            {user ? (
+              <button onClick={() => setAppModeWithSidebar("profile")} style={{
+                padding: "10px 20px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.2)",
+                background: "rgba(255,255,255,0.12)", backdropFilter: "blur(8px)",
+                color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer", width: "100%", maxWidth: 400,
+              }}>
+                👤 My Agricola ({user.displayName || user.username})
+              </button>
+            ) : (
+              <button onClick={() => setShowSignIn(true)} style={{
+                padding: "10px 20px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.2)",
+                background: "rgba(255,255,255,0.08)", backdropFilter: "blur(8px)",
+                color: "rgba(255,255,255,0.7)", fontSize: 12, cursor: "pointer",
+              }}>
+                Sign in to track your games
+              </button>
+            )}
+          </div>
+
           {/* Footer */}
-          <div style={{ position: "relative", zIndex: 2, textAlign: "center", padding: "14px 20px", fontSize: 10, color: "rgba(255,255,255,0.4)" }}>
+          <div style={{ position: "relative", zIndex: 2, textAlign: "center", padding: "8px 20px 14px", fontSize: 10, color: "rgba(255,255,255,0.4)" }}>
             <a href="/about" style={{ color: "rgba(255,255,255,0.4)", textDecoration: "none" }}>App documentation</a>
           </div>
+          {showSignIn && <SignInModal onClose={() => setShowSignIn(false)} />}
         </div>
       );
     }
 
-    if (appMode === "drafter" || appMode === "hands" || appMode === "score" || appMode === "wiki" || appMode === "live") {
+    if (appMode === "drafter" || appMode === "hands" || appMode === "score" || appMode === "wiki" || appMode === "live" || appMode === "profile") {
       return (
         <div style={{ display: "flex", flexDirection: "column", height: "100dvh", width: "100%", overflow: "hidden", background: E.bg, color: E.textSecondary, fontFamily: "Inter, system-ui, sans-serif" }}>
           {/* Mobile drafter/hands/score/wiki header */}
@@ -1518,6 +1589,12 @@ export default function App() {
           }}>
             {mobileModeSwitcher}
             <div style={{ marginLeft: "auto" }}>
+              {!user && (
+                <button onClick={() => setShowSignIn(true)} style={{
+                  padding: "5px 10px", borderRadius: 6, border: `1px solid ${E.border}`,
+                  background: E.surface, color: E.textMuted, fontSize: 10, cursor: "pointer",
+                }}>Sign in</button>
+              )}
             </div>
           </div>
           <div style={{ flex: 1, overflow: "hidden" }}>
@@ -1529,9 +1606,12 @@ export default function App() {
               ? <CardWiki allCards={allCards} initialCardId={wikiCardId} />
               : appMode === "live"
               ? <LiveGame allCards={allCards} />
+              : appMode === "profile"
+              ? <ProfilePage allCards={allCards} />
               : <ScoreSheet allCards={activeCards} />
             }
           </div>
+          {showSignIn && <SignInModal onClose={() => setShowSignIn(false)} />}
         </div>
       );
     }
@@ -1835,6 +1915,26 @@ export default function App() {
             background: "transparent", color: E.textMuted,
             fontSize: 12, cursor: "pointer", textDecoration: "none", transition: "all 0.15s",
           }}>{"\u2139\uFE0F"}</a>
+          {user ? (
+            <button onClick={() => setAppModeWithSidebar("profile")}
+              style={{
+                display: "flex", alignItems: "center", gap: 5,
+                padding: "6px 12px", borderRadius: 6,
+                border: `1px solid ${appMode === "profile" ? E.accent : E.border}`,
+                background: appMode === "profile" ? E.accent + "18" : "transparent",
+                color: appMode === "profile" ? E.accent : E.textMuted,
+                fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all 0.15s",
+              }}>
+              \uD83D\uDC64 {user.username}
+            </button>
+          ) : (
+            <button onClick={() => setShowSignIn(true)}
+              style={{
+                padding: "6px 12px", borderRadius: 6, border: `1px solid ${E.border}`,
+                background: "transparent", color: E.textMuted,
+                fontSize: 12, cursor: "pointer", transition: "all 0.15s",
+              }}>Sign in</button>
+          )}
         </div>
         {backupMsg && (
           <div style={{
@@ -1904,6 +2004,10 @@ export default function App() {
       ) : appMode === "live" ? (
         <div style={{ flex: 1, overflow: "hidden" }}>
           <LiveGame allCards={allCards} />
+        </div>
+      ) : appMode === "profile" && user ? (
+        <div style={{ flex: 1, overflow: "hidden" }}>
+          <ProfilePage />
         </div>
       ) : (
       <>
@@ -2115,6 +2219,7 @@ export default function App() {
       </>
       )}
       </div>
+      {showSignIn && <SignInModal onClose={() => setShowSignIn(false)} />}
     </div>
   );
 }

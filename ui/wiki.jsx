@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
+import { useAuth } from "./auth.jsx";
 
 const API_BASE = "";
 
@@ -222,12 +223,61 @@ function badgeStyle(bg, color) {
 // ── Card Wiki Detail Page ──────────────────────────────────────────────────
 
 function CardWikiPage({ cardId, allCards, cardsById, onBack, onNavigate }) {
+  const { user } = useAuth();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState("combos");
   const [showAddCombo, setShowAddCombo] = useState(false);
   const [showAddNobo, setShowAddNobo] = useState(false);
   const [showAddTip, setShowAddTip] = useState(false);
+
+  // ── Favourites ──
+  const [isFav, setIsFav] = useState(false);
+  const [favNote, setFavNote] = useState("");
+  const [editingNote, setEditingNote] = useState(false);
+  const [favLoading, setFavLoading] = useState(false);
+
+  useEffect(() => {
+    if (!user) { setIsFav(false); setFavNote(""); return; }
+    fetch(`${API_BASE}/api/me/favourites`, { credentials: "include" })
+      .then(r => r.json())
+      .then(favs => {
+        const match = (favs || []).find(f => f.cardId === cardId);
+        setIsFav(!!match);
+        setFavNote(match?.notes || "");
+      })
+      .catch(() => {});
+  }, [user, cardId]);
+
+  const toggleFav = async () => {
+    if (!user || favLoading) return;
+    setFavLoading(true);
+    try {
+      if (isFav) {
+        await fetch(`${API_BASE}/api/me/favourites/${cardId}`, { method: "DELETE", credentials: "include" });
+        setIsFav(false);
+        setFavNote("");
+      } else {
+        await fetch(`${API_BASE}/api/me/favourites`, {
+          method: "POST", credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cardId, notes: "" }),
+        });
+        setIsFav(true);
+      }
+    } catch (e) { console.error(e); }
+    setFavLoading(false);
+  };
+
+  const saveNote = async () => {
+    if (!user) return;
+    await fetch(`${API_BASE}/api/me/favourites`, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cardId, notes: favNote }),
+    });
+    setEditingNote(false);
+  };
 
   const loadData = useCallback(() => {
     setLoading(true);
@@ -273,8 +323,16 @@ function CardWikiPage({ cardId, allCards, cardsById, onBack, onNavigate }) {
             <h1 style={{ fontSize: "1.4rem", fontWeight: 700, margin: 0 }}>{card.name}</h1>
             <div style={{ color: T.muted, fontSize: "0.9rem" }}>{card.type} &middot; Deck {card.deck}</div>
           </div>
-          <div style={{ marginLeft: "auto", fontSize: "0.85rem" }}>
-            <a href="/ontology" style={{ color: T.bg, opacity: 0.7, textDecoration: "none" }}>Ontology</a>
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
+            {user && (
+              <button onClick={toggleFav} title={isFav ? "Remove from favourites" : "Add to favourites"}
+                style={{
+                  background: "none", border: "none", fontSize: 22, cursor: "pointer",
+                  color: isFav ? "#ef4444" : "rgba(255,255,255,0.5)", transition: "all 0.15s",
+                  transform: isFav ? "scale(1.1)" : "scale(1)",
+                }}>{isFav ? "❤️" : "🩶"}</button>
+            )}
+            <a href="/ontology" style={{ color: T.bg, opacity: 0.7, textDecoration: "none", fontSize: "0.85rem" }}>Ontology</a>
           </div>
         </div>
       </div>
@@ -317,6 +375,46 @@ function CardWikiPage({ cardId, allCards, cardsById, onBack, onNavigate }) {
             )}
           </div>
         </div>
+
+        {/* Favourite note */}
+        {user && isFav && (
+          <div style={{
+            marginBottom: 24, padding: 16, background: "#fef3c7", borderRadius: 10,
+            border: "1px solid #fde68a",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <span style={{ fontSize: 14, fontWeight: 600, color: "#92400e" }}>Your notes</span>
+              {!editingNote && (
+                <button onClick={() => setEditingNote(true)}
+                  style={{ background: "none", border: "none", fontSize: 12, color: T.link, cursor: "pointer" }}>
+                  {favNote ? "Edit" : "Add note"}
+                </button>
+              )}
+            </div>
+            {editingNote ? (
+              <div style={{ display: "flex", gap: 8 }}>
+                <textarea value={favNote} onChange={e => setFavNote(e.target.value)}
+                  placeholder="Strategy notes, combos to remember..."
+                  style={{
+                    flex: 1, padding: 10, borderRadius: 8, border: `1px solid ${T.border}`,
+                    fontSize: 13, fontFamily: "inherit", resize: "vertical", minHeight: 60,
+                  }} autoFocus />
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <button onClick={saveNote} style={{
+                    padding: "6px 14px", borderRadius: 6, border: "none",
+                    background: T.accent, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer",
+                  }}>Save</button>
+                  <button onClick={() => setEditingNote(false)} style={{
+                    padding: "6px 14px", borderRadius: 6, border: `1px solid ${T.border}`,
+                    background: "transparent", color: T.muted, fontSize: 12, cursor: "pointer",
+                  }}>Cancel</button>
+                </div>
+              </div>
+            ) : (
+              favNote && <div style={{ fontSize: 13, color: "#78716c", lineHeight: 1.5 }}>{favNote}</div>
+            )}
+          </div>
+        )}
 
         {/* Tournament Statistics */}
         <section style={{ marginBottom: 40 }}>

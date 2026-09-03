@@ -23,12 +23,15 @@ import json
 import base64
 import sqlite3
 import hashlib
+import secrets
+import uuid
 import datetime
 from typing import Optional
 from urllib.parse import unquote
 
 import httpx
-from fastapi import FastAPI, Request
+import resend
+from fastapi import FastAPI, Request, Cookie
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, Response, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -172,6 +175,334 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── Auth configuration ──────────────────────────────────────────────────────
+
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+APP_URL = os.environ.get("APP_URL", "https://agricola.veronahe.no")
+SESSION_MAX_AGE = 30 * 24 * 3600  # 30 days
+
+if RESEND_API_KEY:
+    resend.api_key = RESEND_API_KEY
+
+def _get_current_user(request: Request) -> Optional[dict]:
+    """Extract the current user from the session cookie, or return None."""
+    session_token = request.cookies.get("agricola_session")
+    if not session_token:
+        return None
+    conn = _get_db()
+    row = conn.execute(
+        "SELECT s.userId, u.email, u.username, u.displayName FROM sessions s JOIN users u ON s.userId = u.id WHERE s.token = ? AND s.expiresAt > ?",
+        (session_token, datetime.datetime.utcnow().isoformat())
+    ).fetchone()
+    if not row:
+        return None
+    return {"id": dict(row)["userId"], "email": dict(row)["email"], "username": dict(row)["username"], "displayName": dict(row)["displayName"]}
+
+
+IS_PRODUCTION = bool(RESEND_API_KEY)
+
+# ── Auth endpoints ──────────────────────────────────────────────────────────
+
+class AuthRequestBody(BaseModel):
+    email: str
+    username: str = ""
+    displayName: str = ""
+
+@app.post("/api/auth/request-link", summary="Request a magic sign-in link",
+          description="Sends a magic link to the given email. If the email is new, username and displayName are required.")
+def request_magic_link(body: AuthRequestBody):
+    email = body.email.strip().lower()
+    if not email or "@" not in email:
+        return JSONResponse({"error": "Invalid email"}, status_code=400)
+    conn = _get_db()
+    existing_user = conn.execute("SELECT id, username FROM users WHERE email = ?", (email,)).fetchone()
+    is_new = existing_user is None
+    if is_new and not body.username.strip():
+        # Tell the frontend to show the username step — don't send an email yet
+        return {"ok": True, "isNew": True}
+    # Check username availability for new users
+    if is_new:
+        uname = body.username.strip()
+        taken = conn.execute("SELECT id FROM users WHERE username = ? COLLATE NOCASE", (uname,)).fetchone()
+        if taken:
+            return JSONResponse({"error": f"Username '{uname}' is already taken"}, status_code=409)
+    # Generate token
+    token = secrets.token_urlsafe(48)
+    expires = (datetime.datetime.utcnow() + datetime.timedelta(minutes=15)).isoformat()
+    conn.execute("INSERT INTO auth_tokens (token, email, expiresAt) VALUES (?, ?, ?)", (token, email, expires))
+    conn.commit()
+    magic_url = f"{APP_URL}?auth_token={token}"
+    # Send email
+    if RESEND_API_KEY:
+        try:
+            resend.Emails.send({
+                "from": "Agricola Explorer <noreply@veronahe.no>",
+                "to": [email],
+                "subject": "Sign in to Agricola Explorer",
+                "html": f"""
+                    <div style="font-family: Inter, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px 20px;">
+                        <h2 style="color: #b45309; margin-bottom: 16px;">Agricola Explorer</h2>
+                        <p>Click the link below to sign in. It expires in 15 minutes.</p>
+                        <a href="{magic_url}" style="display: inline-block; padding: 12px 28px; background: #b45309; color: #fff; text-decoration: none; border-radius: 8px; font-weight: 600; margin: 16px 0;">Sign in</a>
+                        <p style="font-size: 12px; color: #9e9790; margin-top: 20px;">If you didn't request this, just ignore this email.</p>
+                    </div>
+                """,
+            })
+        except Exception as e:
+            print(f"[auth] Resend error: {e}")
+            return JSONResponse({"error": "Failed to send email"}, status_code=500)
+    else:
+        print(f"[auth] Magic link (no Resend key): {magic_url}")
+    return {"ok": True, "isNew": is_new}
+
+
+@app.get("/api/auth/verify", summary="Verify a magic link token",
+         description="Verifies the token from the magic link, creates the user if new, and sets a session cookie.")
+def verify_magic_link(token: str, username: str = "", displayName: str = ""):
+    conn = _get_db()
+    row = conn.execute("SELECT email, used, expiresAt FROM auth_tokens WHERE token = ?", (token,)).fetchone()
+    if not row:
+        return JSONResponse({"error": "Invalid or expired link"}, status_code=400)
+    row = dict(row)
+    if row["used"]:
+        return JSONResponse({"error": "This link has already been used"}, status_code=400)
+    if row["expiresAt"] < datetime.datetime.utcnow().isoformat():
+        return JSONResponse({"error": "This link has expired"}, status_code=400)
+    email = row["email"]
+    # Mark token as used
+    conn.execute("UPDATE auth_tokens SET used = 1 WHERE token = ?", (token,))
+    # Find or create user
+    user = conn.execute("SELECT id, username, displayName FROM users WHERE email = ?", (email,)).fetchone()
+    if user:
+        user_id = dict(user)["id"]
+    else:
+        # New user — need username
+        uname = username.strip()
+        dname = displayName.strip() or uname
+        if not uname:
+            conn.commit()
+            return JSONResponse({"error": "Username required for new account", "needsUsername": True}, status_code=400)
+        # Check uniqueness
+        taken = conn.execute("SELECT id FROM users WHERE username = ? COLLATE NOCASE", (uname,)).fetchone()
+        if taken:
+            conn.commit()
+            return JSONResponse({"error": f"Username '{uname}' is already taken", "needsUsername": True}, status_code=409)
+        user_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO users (id, email, username, displayName, createdAt) VALUES (?, ?, ?, ?, ?)",
+            (user_id, email, uname, dname, datetime.datetime.utcnow().isoformat())
+        )
+    # Create session
+    session_token = secrets.token_urlsafe(48)
+    session_expires = (datetime.datetime.utcnow() + datetime.timedelta(seconds=SESSION_MAX_AGE)).isoformat()
+    conn.execute("INSERT INTO sessions (token, userId, expiresAt) VALUES (?, ?, ?)", (session_token, user_id, session_expires))
+    conn.commit()
+    # Auto-claim: link existing scores/drafts/challenges by username
+    user_row = conn.execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()
+    if user_row:
+        uname = dict(user_row)["username"]
+        conn.execute("UPDATE scores SET userId = ? WHERE userId IS NULL AND name = ? COLLATE NOCASE", (user_id, uname))
+        conn.execute("UPDATE drafts SET userId = ? WHERE userId IS NULL AND username = ? COLLATE NOCASE", (user_id, uname))
+        conn.execute("UPDATE challenge_attempts SET userId = ? WHERE userId IS NULL AND challengerName = ? COLLATE NOCASE", (user_id, uname))
+        conn.commit()
+    # Build response with cookie
+    user_data = conn.execute("SELECT id, email, username, displayName FROM users WHERE id = ?", (user_id,)).fetchone()
+    resp = JSONResponse({"ok": True, "user": dict(user_data)})
+    resp.set_cookie("agricola_session", session_token, max_age=SESSION_MAX_AGE, httponly=True, samesite="lax", secure=IS_PRODUCTION)
+    return resp
+
+
+@app.post("/api/auth/dev-login", summary="Dev-only: create and log in a test user",
+          description="Only works when RESEND_API_KEY is not set (i.e. local dev).")
+def dev_login(body: AuthRequestBody):
+    if RESEND_API_KEY:
+        return JSONResponse({"error": "Dev login disabled in production"}, status_code=403)
+    email = body.email.strip().lower() or "test@localhost"
+    uname = body.username.strip() or "TestUser"
+    dname = body.displayName.strip() if body.displayName else uname
+    conn = _get_db()
+    user = conn.execute("SELECT id, username, displayName FROM users WHERE email = ?", (email,)).fetchone()
+    if user:
+        user_id = dict(user)["id"]
+    else:
+        user_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO users (id, email, username, displayName, createdAt) VALUES (?, ?, ?, ?, ?)",
+            (user_id, email, uname, dname, datetime.datetime.utcnow().isoformat())
+        )
+    # Create session
+    session_token = secrets.token_urlsafe(48)
+    session_expires = (datetime.datetime.utcnow() + datetime.timedelta(seconds=SESSION_MAX_AGE)).isoformat()
+    conn.execute("INSERT INTO sessions (token, userId, expiresAt) VALUES (?, ?, ?)", (session_token, user_id, session_expires))
+    conn.commit()
+    # Auto-claim
+    conn.execute("UPDATE scores SET userId = ? WHERE userId IS NULL AND name = ? COLLATE NOCASE", (user_id, uname))
+    conn.execute("UPDATE drafts SET userId = ? WHERE userId IS NULL AND username = ? COLLATE NOCASE", (user_id, uname))
+    conn.execute("UPDATE challenge_attempts SET userId = ? WHERE userId IS NULL AND challengerName = ? COLLATE NOCASE", (user_id, uname))
+    conn.commit()
+    user_data = conn.execute("SELECT id, email, username, displayName FROM users WHERE id = ?", (user_id,)).fetchone()
+    resp = JSONResponse({"ok": True, "user": dict(user_data)})
+    resp.set_cookie("agricola_session", session_token, max_age=SESSION_MAX_AGE, httponly=True, samesite="lax", secure=False)
+    return resp
+
+
+@app.get("/api/auth/me", summary="Get current user",
+         description="Returns the currently logged-in user, or null.")
+def get_current_user(request: Request):
+    user = _get_current_user(request)
+    if not user:
+        return {"user": None}
+    # Also return counts
+    conn = _get_db()
+    score_count = conn.execute("SELECT COUNT(*) FROM scores WHERE userId = ?", (user["id"],)).fetchone()[0]
+    draft_count = conn.execute("SELECT COUNT(*) FROM drafts WHERE userId = ?", (user["id"],)).fetchone()[0]
+    fav_count = conn.execute("SELECT COUNT(*) FROM favourites WHERE userId = ?", (user["id"],)).fetchone()[0]
+    return {"user": {**user, "scoreCount": score_count, "draftCount": draft_count, "favCount": fav_count}}
+
+
+@app.post("/api/auth/logout", summary="Log out")
+def logout(request: Request):
+    session_token = request.cookies.get("agricola_session")
+    if session_token:
+        conn = _get_db()
+        conn.execute("DELETE FROM sessions WHERE token = ?", (session_token,))
+        conn.commit()
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie("agricola_session")
+    return resp
+
+
+# ── User data endpoints ─────────────────────────────────────────────────────
+
+@app.get("/api/me/scores", summary="Get current user's scores")
+def get_my_scores(request: Request):
+    user = _get_current_user(request)
+    if not user:
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+    conn = _get_db()
+    rows = conn.execute(
+        "SELECT * FROM scores WHERE userId = ? ORDER BY timestamp DESC", (user["id"],)
+    ).fetchall()
+    scores = []
+    for r in rows:
+        d = dict(r)
+        d["values"] = json.loads(d.pop("valuesJson", "{}"))
+        d["points"] = json.loads(d.pop("pointsJson", "{}"))
+        d["cardLog"] = json.loads(d.get("cardLog") or "null")
+        scores.append(d)
+    return {"scores": scores}
+
+
+@app.get("/api/me/drafts", summary="Get current user's drafts")
+def get_my_drafts(request: Request):
+    user = _get_current_user(request)
+    if not user:
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+    conn = _get_db()
+    rows = conn.execute(
+        "SELECT * FROM drafts WHERE userId = ? ORDER BY timestamp DESC", (user["id"],)
+    ).fetchall()
+    return {"drafts": [dict(r) for r in rows]}
+
+
+@app.get("/api/me/challenges", summary="Get current user's challenge attempts")
+def get_my_challenges(request: Request):
+    user = _get_current_user(request)
+    if not user:
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+    conn = _get_db()
+    rows = conn.execute(
+        """SELECT ca.*, c.draftType, c.creatorName, c.seed
+           FROM challenge_attempts ca
+           JOIN challenges c ON ca.challengeId = c.id
+           WHERE ca.userId = ?
+           ORDER BY ca.completedAt DESC""", (user["id"],)
+    ).fetchall()
+    return {"challenges": [dict(r) for r in rows]}
+
+
+@app.get("/api/me/favourites", summary="Get current user's favourite cards")
+def get_my_favourites(request: Request):
+    user = _get_current_user(request)
+    if not user:
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+    conn = _get_db()
+    rows = conn.execute(
+        "SELECT cardId, notes, createdAt FROM favourites WHERE userId = ? ORDER BY createdAt DESC", (user["id"],)
+    ).fetchall()
+    return {"favourites": [dict(r) for r in rows]}
+
+
+class FavouriteBody(BaseModel):
+    cardId: str
+    notes: str = ""
+
+@app.post("/api/me/favourites", summary="Add or update a favourite card")
+def add_favourite(body: FavouriteBody, request: Request):
+    user = _get_current_user(request)
+    if not user:
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+    conn = _get_db()
+    now = datetime.datetime.utcnow().isoformat()
+    conn.execute(
+        "INSERT INTO favourites (userId, cardId, notes, createdAt) VALUES (?, ?, ?, ?) ON CONFLICT(userId, cardId) DO UPDATE SET notes = ?",
+        (user["id"], body.cardId, body.notes, now, body.notes)
+    )
+    conn.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/me/favourites/{card_id}", summary="Remove a favourite card")
+def remove_favourite(card_id: str, request: Request):
+    user = _get_current_user(request)
+    if not user:
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+    conn = _get_db()
+    conn.execute("DELETE FROM favourites WHERE userId = ? AND cardId = ?", (user["id"], card_id))
+    conn.commit()
+    return {"ok": True}
+
+
+@app.get("/api/me/stats", summary="Get current user's statistics")
+def get_my_stats(request: Request):
+    user = _get_current_user(request)
+    if not user:
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+    conn = _get_db()
+    uid = user["id"]
+    # Score stats
+    score_rows = conn.execute("SELECT total FROM scores WHERE userId = ?", (uid,)).fetchall()
+    score_totals = [r[0] for r in score_rows]
+    # Draft stats
+    draft_count = conn.execute("SELECT COUNT(*) FROM drafts WHERE userId = ?", (uid,)).fetchone()[0]
+    # Challenge stats
+    challenge_count = conn.execute("SELECT COUNT(*) FROM challenge_attempts WHERE userId = ?", (uid,)).fetchone()[0]
+    # Favourite count
+    fav_count = conn.execute("SELECT COUNT(*) FROM favourites WHERE userId = ?", (uid,)).fetchone()[0]
+    stats = {
+        "gamesScored": len(score_totals),
+        "bestScore": max(score_totals) if score_totals else None,
+        "avgScore": round(sum(score_totals) / len(score_totals), 1) if score_totals else None,
+        "worstScore": min(score_totals) if score_totals else None,
+        "totalDrafts": draft_count,
+        "totalChallenges": challenge_count,
+        "totalFavourites": fav_count,
+    }
+    # Score category averages
+    if score_totals:
+        cat_sums = {}
+        cat_counts = {}
+        all_scores = conn.execute("SELECT pointsJson FROM scores WHERE userId = ?", (uid,)).fetchall()
+        for r in all_scores:
+            pts = json.loads(r[0])
+            for k, v in pts.items():
+                if v is not None:
+                    cat_sums[k] = cat_sums.get(k, 0) + v
+                    cat_counts[k] = cat_counts.get(k, 0) + 1
+        stats["categoryAverages"] = {k: round(cat_sums[k] / cat_counts[k], 1) for k in cat_sums if cat_counts[k] > 0}
+    return {"stats": stats}
+
 
 # ── API routes ───────────────────────────────────────────────────────────────
 
@@ -449,6 +780,55 @@ def _get_db() -> sqlite3.Connection:
         conn.execute("ALTER TABLE scores ADD COLUMN startingPosition TEXT")
     if "cardLog" not in score_cols:
         conn.execute("ALTER TABLE scores ADD COLUMN cardLog TEXT")
+
+    # ── Users & auth tables ──────────────────────────────────────────────────
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id          TEXT PRIMARY KEY,
+            email       TEXT NOT NULL UNIQUE,
+            username    TEXT NOT NULL UNIQUE,
+            displayName TEXT NOT NULL,
+            createdAt   TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS auth_tokens (
+            token       TEXT PRIMARY KEY,
+            email       TEXT NOT NULL,
+            expiresAt   TEXT NOT NULL,
+            used        INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sessions (
+            token       TEXT PRIMARY KEY,
+            userId      TEXT NOT NULL,
+            expiresAt   TEXT NOT NULL
+        )
+    """)
+
+    # ── Favourites table ─────────────────────────────────────────────────────
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS favourites (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            userId      TEXT NOT NULL,
+            cardId      TEXT NOT NULL,
+            notes       TEXT DEFAULT '',
+            createdAt   TEXT NOT NULL,
+            UNIQUE (userId, cardId)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_favs_user ON favourites(userId)")
+
+    # ── Migration: add user_id to existing tables ────────────────────────────
+    for tbl in ["drafts", "scores"]:
+        tbl_cols = {row[1] for row in conn.execute(f"PRAGMA table_info({tbl})").fetchall()}
+        if "userId" not in tbl_cols:
+            conn.execute(f"ALTER TABLE {tbl} ADD COLUMN userId TEXT")
+    attempts_cols = {row[1] for row in conn.execute("PRAGMA table_info(challenge_attempts)").fetchall()}
+    if "userId" not in attempts_cols:
+        conn.execute("ALTER TABLE challenge_attempts ADD COLUMN userId TEXT")
+
     conn.commit()
     return conn
 
@@ -483,7 +863,7 @@ _PICK_COUNTS = {"Occupation": 7, "MinorImprovement": 7, "FullCombo": 14}
 
 @app.post("/api/drafts", summary="Save a draft hand",
           description="Save a completed card draft to the community database.")
-def save_draft(req: DraftSaveRequest):
+def save_draft(req: DraftSaveRequest, request: Request):
     if not req.username.strip():
         return JSONResponse(status_code=400, content={"error": "username required"})
     expected_picks = _PICK_COUNTS.get(req.draftType)
@@ -523,11 +903,14 @@ def save_draft(req: DraftSaveRequest):
     # Serialize combos: list of {cardIds, comment}
     combos_json = json.dumps([{"cardIds": c.cardIds, "comment": (c.comment or "").strip()[:200]} for c in (req.combos or [])])
 
+    user = _get_current_user(request)
+    user_id = user["id"] if user else None
+
     conn.execute(
-        "INSERT INTO drafts (id, username, draftType, picks, pickOrder, timestamp, comment, picksHash, combos, challengeId) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO drafts (id, username, draftType, picks, pickOrder, timestamp, comment, picksHash, combos, challengeId, userId) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         (draft_id, req.username.strip(), req.draftType,
          json.dumps(req.picks), json.dumps(req.pickOrder), ts,
-         (req.comment or "").strip()[:500], ph, combos_json, req.challengeId),
+         (req.comment or "").strip()[:500], ph, combos_json, req.challengeId, user_id),
     )
     conn.commit()
 
@@ -1040,7 +1423,7 @@ class ScoreSaveRequest(BaseModel):
 
 @app.post("/api/scores", summary="Save a game score",
           description="Record a new Agricola game score with full category breakdown and optional card log.")
-def save_score(req: ScoreSaveRequest):
+def save_score(req: ScoreSaveRequest, request: Request):
     if not req.name.strip():
         return JSONResponse(status_code=400, content={"error": "name required"})
 
@@ -1048,17 +1431,19 @@ def save_score(req: ScoreSaveRequest):
     ts = datetime.datetime.utcnow().isoformat() + "Z"
 
     card_log_json = json.dumps(req.cardLog) if req.cardLog else None
+    user = _get_current_user(request)
+    user_id = user["id"] if user else None
 
     conn = _get_db()
     conn.execute(
-        "INSERT INTO scores (id, name, tournament, tableNumber, gameNumber, startingPosition, valuesJson, pointsJson, total, timestamp, cardLog) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO scores (id, name, tournament, tableNumber, gameNumber, startingPosition, valuesJson, pointsJson, total, timestamp, cardLog, userId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         (score_id, req.name.strip(),
          (req.tournament or "").strip() or None,
          (req.tableNumber or "").strip() or None,
          (req.gameNumber or "").strip() or None,
          (req.startingPosition or "").strip() or None,
          json.dumps(req.values), json.dumps(req.points),
-         req.total, ts, card_log_json),
+         req.total, ts, card_log_json, user_id),
     )
     conn.commit()
     conn.close()
