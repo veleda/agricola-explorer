@@ -494,16 +494,21 @@ function TournamentAnalytics({ onClose }) {
     return allScores.filter(s => s.tournament?.trim() === selectedTournament);
   }, [allScores, selectedTournament]);
 
-  // ── Analytics calculations ──
-  const analytics = useMemo(() => {
-    if (scores.length === 0) return null;
+  // ── Computed scores for analytics (always run — hooks can't be conditional) ──
+  const displayScores = useMemo(() => {
+    if (!selectedTournament) return [];
+    return selectedTournament === "__ALL__" ? allScores : scores;
+  }, [selectedTournament, allScores, scores]);
 
-    // Leaderboard: best score per player, sorted desc
-    const playerBest = {};
+  const displayTitle = selectedTournament === "__ALL__" ? "All Scores" : selectedTournament;
+
+  const analytics = useMemo(() => {
+    const sc = displayScores;
+    if (sc.length === 0) return null;
+
     const playerAll = {};
-    for (const s of scores) {
+    for (const s of sc) {
       const n = s.name;
-      if (!playerBest[n] || s.total > playerBest[n].total) playerBest[n] = s;
       if (!playerAll[n]) playerAll[n] = [];
       playerAll[n].push(s);
     }
@@ -514,8 +519,7 @@ function TournamentAnalytics({ onClose }) {
       games: games.length,
     })).sort((a, b) => b.best - a.best);
 
-    // Score distribution (buckets of 5)
-    const totals = scores.map(s => s.total);
+    const totals = sc.map(s => s.total);
     const minScore = Math.min(...totals);
     const maxScore = Math.max(...totals);
     const bucketSize = 5;
@@ -523,24 +527,16 @@ function TournamentAnalytics({ onClose }) {
     const bucketEnd = Math.ceil((maxScore + 1) / bucketSize) * bucketSize;
     const distribution = [];
     for (let b = bucketStart; b < bucketEnd; b += bucketSize) {
-      const count = totals.filter(t => t >= b && t < b + bucketSize).length;
-      distribution.push({ label: `${b}–${b + bucketSize - 1}`, count });
+      distribution.push({ label: `${b}–${b + bucketSize - 1}`, count: totals.filter(t => t >= b && t < b + bucketSize).length });
     }
 
-    // Category averages
     const catSums = {};
     const catCounts = {};
-    for (const cat of CATEGORIES) {
-      catSums[cat.key] = 0;
-      catCounts[cat.key] = 0;
-    }
-    for (const s of scores) {
+    for (const cat of CATEGORIES) { catSums[cat.key] = 0; catCounts[cat.key] = 0; }
+    for (const s of sc) {
       for (const cat of CATEGORIES) {
         const pts = s.points?.[cat.key];
-        if (pts !== undefined && pts !== null) {
-          catSums[cat.key] += pts;
-          catCounts[cat.key]++;
-        }
+        if (pts !== undefined && pts !== null) { catSums[cat.key] += pts; catCounts[cat.key]++; }
       }
     }
     const categoryAvg = CATEGORIES.map(cat => ({
@@ -548,66 +544,42 @@ function TournamentAnalytics({ onClose }) {
       avg: catCounts[cat.key] > 0 ? Math.round(catSums[cat.key] / catCounts[cat.key] * 10) / 10 : null,
     }));
 
-    // Group averages
     const groupSums = {};
-    for (const s of scores) {
+    for (const s of sc) {
       for (const cat of CATEGORIES) {
         const g = cat.group;
         if (!groupSums[g]) groupSums[g] = { sum: 0, count: 0 };
         const pts = s.points?.[cat.key];
-        if (pts !== undefined && pts !== null) {
-          groupSums[g].sum += pts;
-          groupSums[g].count++;
-        }
+        if (pts !== undefined && pts !== null) { groupSums[g].sum += pts; groupSums[g].count++; }
       }
     }
     const groupAvg = GROUP_ORDER.map(g => ({
-      group: g,
-      label: GROUP_LABELS[g],
+      group: g, label: GROUP_LABELS[g],
       avg: groupSums[g]?.count > 0 ? Math.round(groupSums[g].sum / groupSums[g].count * 10) / 10 : null,
     }));
 
-    // Starting position analysis
     const posBuckets = {};
-    for (const s of scores) {
+    for (const s of sc) {
       const pos = s.startingPosition?.trim();
-      if (pos) {
-        if (!posBuckets[pos]) posBuckets[pos] = [];
-        posBuckets[pos].push(s.total);
-      }
+      if (pos) { if (!posBuckets[pos]) posBuckets[pos] = []; posBuckets[pos].push(s.total); }
     }
     const positionStats = Object.entries(posBuckets)
-      .map(([pos, totals]) => ({
-        position: pos,
-        avg: Math.round(totals.reduce((a, b) => a + b, 0) / totals.length * 10) / 10,
-        count: totals.length,
-        best: Math.max(...totals),
-      }))
+      .map(([pos, tots]) => ({ position: pos, avg: Math.round(tots.reduce((a, b) => a + b, 0) / tots.length * 10) / 10, count: tots.length, best: Math.max(...tots) }))
       .sort((a, b) => Number(a.position) - Number(b.position));
 
-    // Score trends (by timestamp order)
-    const sorted = [...scores].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    const sorted = [...sc].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
     const trends = sorted.map((s, i) => ({
       label: new Date(s.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
-      name: s.name,
-      total: s.total,
-      index: i,
+      name: s.name, total: s.total, index: i,
     }));
 
     return {
-      leaderboard,
-      distribution,
-      categoryAvg,
-      groupAvg,
-      positionStats,
-      trends,
-      totalGames: scores.length,
-      totalPlayers: leaderboard.length,
+      leaderboard, distribution, categoryAvg, groupAvg, positionStats, trends,
+      totalGames: sc.length, totalPlayers: leaderboard.length,
       avgScore: Math.round(totals.reduce((a, b) => a + b, 0) / totals.length * 10) / 10,
-      highScore: maxScore,
-      lowScore: minScore,
+      highScore: maxScore, lowScore: minScore,
     };
-  }, [scores]);
+  }, [displayScores]);
 
   // Helper: simple bar chart
   const Bar = ({ value, max, color = T.accent }) => (
@@ -702,91 +674,7 @@ function TournamentAnalytics({ onClose }) {
     );
   }
 
-  // ── "All scores" mode ──
-  const displayScores = selectedTournament === "__ALL__" ? allScores : scores;
-  const displayTitle = selectedTournament === "__ALL__" ? "All Scores" : selectedTournament;
-
-  // Recalculate analytics for "all" case
-  const displayAnalytics = useMemo(() => {
-    const sc = displayScores;
-    if (sc.length === 0) return null;
-
-    const playerAll = {};
-    for (const s of sc) {
-      const n = s.name;
-      if (!playerAll[n]) playerAll[n] = [];
-      playerAll[n].push(s);
-    }
-    const leaderboard = Object.entries(playerAll).map(([name, games]) => ({
-      name,
-      best: Math.max(...games.map(g => g.total)),
-      avg: Math.round(games.map(g => g.total).reduce((a, b) => a + b, 0) / games.length * 10) / 10,
-      games: games.length,
-    })).sort((a, b) => b.best - a.best);
-
-    const totals = sc.map(s => s.total);
-    const minScore = Math.min(...totals);
-    const maxScore = Math.max(...totals);
-    const bucketSize = 5;
-    const bucketStart = Math.floor(minScore / bucketSize) * bucketSize;
-    const bucketEnd = Math.ceil((maxScore + 1) / bucketSize) * bucketSize;
-    const distribution = [];
-    for (let b = bucketStart; b < bucketEnd; b += bucketSize) {
-      distribution.push({ label: `${b}–${b + bucketSize - 1}`, count: totals.filter(t => t >= b && t < b + bucketSize).length });
-    }
-
-    const catSums = {};
-    const catCounts = {};
-    for (const cat of CATEGORIES) { catSums[cat.key] = 0; catCounts[cat.key] = 0; }
-    for (const s of sc) {
-      for (const cat of CATEGORIES) {
-        const pts = s.points?.[cat.key];
-        if (pts !== undefined && pts !== null) { catSums[cat.key] += pts; catCounts[cat.key]++; }
-      }
-    }
-    const categoryAvg = CATEGORIES.map(cat => ({
-      ...cat,
-      avg: catCounts[cat.key] > 0 ? Math.round(catSums[cat.key] / catCounts[cat.key] * 10) / 10 : null,
-    }));
-
-    const groupSums = {};
-    for (const s of sc) {
-      for (const cat of CATEGORIES) {
-        const g = cat.group;
-        if (!groupSums[g]) groupSums[g] = { sum: 0, count: 0 };
-        const pts = s.points?.[cat.key];
-        if (pts !== undefined && pts !== null) { groupSums[g].sum += pts; groupSums[g].count++; }
-      }
-    }
-    const groupAvg = GROUP_ORDER.map(g => ({
-      group: g, label: GROUP_LABELS[g],
-      avg: groupSums[g]?.count > 0 ? Math.round(groupSums[g].sum / groupSums[g].count * 10) / 10 : null,
-    }));
-
-    const posBuckets = {};
-    for (const s of sc) {
-      const pos = s.startingPosition?.trim();
-      if (pos) { if (!posBuckets[pos]) posBuckets[pos] = []; posBuckets[pos].push(s.total); }
-    }
-    const positionStats = Object.entries(posBuckets)
-      .map(([pos, tots]) => ({ position: pos, avg: Math.round(tots.reduce((a, b) => a + b, 0) / tots.length * 10) / 10, count: tots.length, best: Math.max(...tots) }))
-      .sort((a, b) => Number(a.position) - Number(b.position));
-
-    const sorted = [...sc].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-    const trends = sorted.map((s, i) => ({
-      label: new Date(s.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
-      name: s.name, total: s.total, index: i,
-    }));
-
-    return {
-      leaderboard, distribution, categoryAvg, groupAvg, positionStats, trends,
-      totalGames: sc.length, totalPlayers: leaderboard.length,
-      avgScore: Math.round(totals.reduce((a, b) => a + b, 0) / totals.length * 10) / 10,
-      highScore: maxScore, lowScore: minScore,
-    };
-  }, [displayScores]);
-
-  const a = selectedTournament === "__ALL__" ? displayAnalytics : analytics;
+  const a = analytics;
   if (!a) return null;
 
   const maxDist = Math.max(...a.distribution.map(d => d.count), 1);
