@@ -1022,6 +1022,110 @@ function Drawer({ open, onClose, side, children, title, themeE }) {
 }
 
 
+// ── Navigation (hamburger drawer) ───────────────────────────────────────────
+const NAV_ITEMS = [
+  { mode: "home", emoji: "\uD83C\uDFE0", title: "Home", desc: "Start screen", mobileOnly: true },
+  { mode: "explorer", emoji: "\uD83D\uDDFA\uFE0F", title: "Card Explorer", desc: "Browse & search cards" },
+  { mode: "drafter", emoji: "\uD83C\uDCCF", title: "Drafter", desc: "Draft cards against 3 NPCs" },
+  { mode: "hands", emoji: "\uD83E\uDD1D", title: "Community Hands", desc: "Browse drafted hands" },
+  { mode: "score", emoji: "\uD83D\uDCCB", title: "Score Sheet", desc: "Calculate your game score" },
+  { mode: "wiki", emoji: "\uD83D\uDCD6", title: "Card Wiki", desc: "Combos, tips & anti-combos" },
+  { mode: "live", emoji: "\uD83C\uDFAF", title: "Live Draft", desc: "Draft with friends at the table" },
+  { mode: "tournament", emoji: "\uD83C\uDFC6", title: "Tournaments", desc: "Tournaments & game nights" },
+  { mode: "profile", emoji: "\uD83D\uDC64", title: "My Agricola", desc: "Favourites, combos & games", authOnly: true },
+];
+
+function HamburgerButton({ onClick, E, appMode, showTitle = true }) {
+  const current = NAV_ITEMS.find(n => n.mode === appMode);
+  return (
+    <button onClick={onClick} aria-label="Open menu"
+      style={{
+        display: "flex", alignItems: "center", gap: 8, flexShrink: 0,
+        padding: "5px 10px 5px 8px", borderRadius: 8, border: `1px solid ${E.border}`,
+        background: E.surface, color: E.text, cursor: "pointer", minHeight: 34,
+      }}>
+      <span style={{ display: "flex", flexDirection: "column", gap: 3, width: 16 }}>
+        {[0, 1, 2].map(i => <span key={i} style={{ height: 2, borderRadius: 1, background: E.textSecondary || E.text }} />)}
+      </span>
+      {showTitle && current && (
+        <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>
+          {current.emoji} {current.title}
+        </span>
+      )}
+    </button>
+  );
+}
+
+function NavDrawer({ open, onClose, appMode, onNavigate, E, user, isMobile, onSignIn }) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  const items = NAV_ITEMS.filter(n => (!n.mobileOnly || isMobile) && (!n.authOnly || user));
+  const go = (mode) => { onNavigate(mode); onClose(); };
+
+  return (
+    <>
+      <div onClick={onClose} style={{
+        position: "fixed", inset: 0, zIndex: 900, background: "rgba(15,23,42,0.45)",
+        opacity: open ? 1 : 0, pointerEvents: open ? "auto" : "none", transition: "opacity 0.2s",
+      }} />
+      <nav aria-hidden={!open} style={{
+        position: "fixed", top: 0, left: 0, bottom: 0, zIndex: 901,
+        width: "min(300px, 85vw)", background: E.surface, borderRight: `1px solid ${E.border}`,
+        boxShadow: open ? "4px 0 24px rgba(0,0,0,0.2)" : "none",
+        transform: open ? "translateX(0)" : "translateX(-105%)", transition: "transform 0.22s ease",
+        display: "flex", flexDirection: "column", fontFamily: "Inter, system-ui, sans-serif",
+        paddingTop: "env(safe-area-inset-top)", paddingBottom: "env(safe-area-inset-bottom)",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", padding: "14px 16px", borderBottom: `1px solid ${E.border}` }}>
+          <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: -0.5, color: E.accent }}>{"\uD83C\uDF3E"} Agricola Explorer</div>
+          <button onClick={onClose} aria-label="Close menu" style={{
+            marginLeft: "auto", background: "none", border: "none", fontSize: 22, lineHeight: 1,
+            color: E.textMuted, cursor: "pointer", padding: 4,
+          }}>{"\u00D7"}</button>
+        </div>
+        <div style={{ flex: 1, overflowY: "auto", padding: "8px 0", overscrollBehavior: "contain" }}>
+          {items.map(({ mode, emoji, title, desc }) => {
+            const active = appMode === mode;
+            return (
+              <button key={mode} onClick={() => go(mode)}
+                style={{
+                  display: "flex", alignItems: "center", gap: 12, width: "100%", textAlign: "left",
+                  padding: "10px 20px", borderRadius: 0, cursor: "pointer",
+                  border: "none",
+                  background: active ? E.accent + "18" : "transparent",
+                }}>
+                <span style={{ fontSize: 20, width: 26, textAlign: "center" }}>{emoji}</span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ display: "block", fontSize: 14, fontWeight: active ? 700 : 600, color: active ? E.accent : E.text }}>{title}</span>
+                  <span style={{ display: "block", fontSize: 11, color: E.textMuted, marginTop: 1 }}>{desc}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ borderTop: `1px solid ${E.border}`, padding: "10px 16px", display: "flex", alignItems: "center", gap: 10 }}>
+          {user ? (
+            <span style={{ fontSize: 12, color: E.textMuted }}>{"\uD83D\uDC64"} {user.displayName || user.username}</span>
+          ) : (
+            <button onClick={() => { onClose(); onSignIn(); }} style={{
+              padding: "6px 12px", borderRadius: 6, border: `1px solid ${E.border}`,
+              background: "transparent", color: E.textSecondary || E.text, fontSize: 12, cursor: "pointer",
+            }}>Sign in</button>
+          )}
+          <a href="/about" target="_blank" rel="noopener" style={{ marginLeft: "auto", fontSize: 12, color: E.textMuted, textDecoration: "none" }}>
+            {"\u2139\uFE0F"} About
+          </a>
+        </div>
+      </nav>
+    </>
+  );
+}
+
 // ── Main App ────────────────────────────────────────────────────────────────
 export default function App() {
   const isMobile = useIsMobile();
@@ -1039,6 +1143,8 @@ export default function App() {
   const [backupOpen, setBackupOpen] = useState(false);
   const [backupMsg, setBackupMsg] = useState(null); // {text, type}
   const [showSignIn, setShowSignIn] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);
+  const closeNav = useCallback(() => setNavOpen(false), []);
   const { user } = useAuth();
   const restoreFileRef = useRef(null);
 
@@ -1445,39 +1551,17 @@ export default function App() {
     </>
   );
 
+  const navDrawer = (
+    <NavDrawer open={navOpen} onClose={closeNav} appMode={appMode}
+      onNavigate={(m) => setAppModeWithSidebar(m)} E={E} user={user} isMobile={isMobile}
+      onSignIn={() => setShowSignIn(true)} />
+  );
+
   // ── MOBILE LAYOUT ─────────────────────────────────────────────────────
   if (isMobile) {
-    // Mobile mode switcher — pill buttons with home icon
-    const mobileModes = [
-      { mode: "home", emoji: "\uD83C\uDFE0", label: "" },
-      { mode: "explorer", emoji: "\uD83D\uDDFA\uFE0F", label: "Explore" },
-      { mode: "drafter", emoji: "\uD83C\uDCCF", label: "Draft" },
-      { mode: "hands", emoji: "\uD83E\uDD1D", label: "Hands" },
-      { mode: "score", emoji: "\uD83D\uDCCB", label: "Score" },
-      { mode: "wiki", emoji: "\uD83D\uDCD6", label: "Wiki" },
-      { mode: "live", emoji: "\uD83C\uDFAF", label: "Live" },
-      { mode: "tournament", emoji: "\uD83C\uDFC6", label: "Tourney" },
-      ...(user ? [{ mode: "profile", emoji: "\uD83D\uDC64", label: "Me" }] : []),
-    ];
+    // Mobile navigation — hamburger button (opens drawer)
     const mobileModeSwitcher = (
-      <div style={{ display: "flex", gap: 3, background: E.surface, borderRadius: 8, padding: 2, border: `1px solid ${E.border}`, overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
-        {mobileModes.map(({ mode, emoji, label }) => {
-          const isActive = appMode === mode;
-          return (
-            <button key={mode} onClick={() => setAppModeWithSidebar(mode)}
-              style={{
-                padding: "5px 10px", borderRadius: 6, border: "none",
-                background: isActive ? E.accent + "22" : "transparent",
-                color: isActive ? E.accent : E.textMuted,
-                fontSize: 11, fontWeight: isActive ? 700 : 500,
-                cursor: "pointer", transition: "all 0.15s",
-                display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap",
-              }}>
-              <span style={{ fontSize: mode === "home" ? 15 : 13 }}>{emoji}</span>{label}
-            </button>
-          );
-        })}
-      </div>
+      <HamburgerButton onClick={() => setNavOpen(true)} E={E} appMode={appMode} showTitle={appMode !== "explorer"} />
     );
 
     // ── Mobile home screen ────────────────────────────────────────────
@@ -1619,6 +1703,7 @@ export default function App() {
               : <ScoreSheet allCards={activeCards} />
             }
           </div>
+          {navDrawer}
           {showSignIn && <SignInModal onClose={() => setShowSignIn(false)} />}
         </div>
       );
@@ -1640,7 +1725,7 @@ export default function App() {
             color: E.textSecondary, padding: "6px 10px", fontSize: 13, cursor: "pointer",
             display: "flex", alignItems: "center", gap: 4,
           }}>
-            <span style={{ fontSize: 16 }}>{"\u2630"}</span>
+            <span style={{ fontSize: 13 }}>{"\u2699\uFE0F"}</span>
             <span style={{ fontSize: 11 }}>Filters</span>
           </button>
 
@@ -1796,6 +1881,7 @@ export default function App() {
             onFilterPrereq={handleFilterPrereq} onSelectCardByName={handleSelectCardByName}
             onViewInWiki={(id) => setAppModeWithSidebar("wiki", { wikiCardId: id })} themeE={E} />
         </Drawer>
+        {navDrawer}
       </div>
     );
   }
@@ -1806,38 +1892,10 @@ export default function App() {
 
       {/* ── Top navigation bar ── */}
       <div style={{ display: "flex", alignItems: "center", height: 44, borderBottom: `1px solid ${E.border}`, background: E.surface, padding: "0 16px", gap: 16, flexShrink: 0 }}>
-        {/* Left: App title */}
+        {/* Left: Hamburger menu + current page */}
+        <HamburgerButton onClick={() => setNavOpen(true)} E={E} appMode={appMode} />
         <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: -0.5, color: E.accent, whiteSpace: "nowrap" }}>
           {"\uD83C\uDF3E"} Agricola
-        </div>
-
-        {/* Center: Mode buttons */}
-        <div style={{ display: "flex", gap: 4 }}>
-          {[
-            { mode: "explorer", emoji: "\uD83D\uDDFA\uFE0F", label: "Explorer" },
-            { mode: "drafter", emoji: "\uD83C\uDCCF", label: "Drafter" },
-            { mode: "hands", emoji: "\uD83E\uDD1D", label: "Hands" },
-            { mode: "score", emoji: "\uD83D\uDCCB", label: "Score" },
-            { mode: "wiki", emoji: "\uD83D\uDCD6", label: "Wiki" },
-            { mode: "live", emoji: "\uD83C\uDFAF", label: "Live" },
-            { mode: "tournament", emoji: "\uD83C\uDFC6", label: "Tourney" },
-          ].map(({ mode, emoji, label }) => {
-            const isActive = appMode === mode;
-            return (
-              <button key={mode} onClick={() => setAppModeWithSidebar(mode)}
-                style={{
-                  display: "flex", alignItems: "center", gap: 5,
-                  padding: "6px 12px", borderRadius: 6, border: `1px solid ${isActive ? E.accent : E.border}`,
-                  background: isActive ? E.accent + "18" : "transparent",
-                  color: isActive ? E.accent : E.textMuted,
-                  fontSize: 12, fontWeight: isActive ? 600 : 500, cursor: "pointer",
-                  transition: "all 0.15s", whiteSpace: "nowrap",
-                }}>
-                <span style={{ fontSize: 13 }}>{emoji}</span>
-                {label}
-              </button>
-            );
-          })}
         </div>
 
         {/* Right: Theme toggle + Norway deck toggle */}
@@ -2242,6 +2300,7 @@ export default function App() {
       </>
       )}
       </div>
+      {navDrawer}
       {showSignIn && <SignInModal onClose={() => setShowSignIn(false)} />}
     </div>
   );
