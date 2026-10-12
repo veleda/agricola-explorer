@@ -289,6 +289,7 @@ function TournamentForm({ onSaved, onCancel, existing, allUsers }) {
         name: name.trim(), startDate, endDate, numGames: parseInt(numGames) || 0, numTables: parseInt(numTables) || 0, players,
         isActive: existing ? !!existing.isActive : true,
         hasFinal, finalWeight: parseFloat(String(finalWeight).replace(",", ".")) || 1.25,
+        tableFill: existing?.tableFill || "3",
       };
       const url = existing ? `${API_BASE}/api/tournaments/${existing.id}` : `${API_BASE}/api/tournaments`;
       const method = existing ? "PUT" : "POST";
@@ -402,7 +403,9 @@ function TournamentForm({ onSaved, onCancel, existing, allUsers }) {
 
 /* ── Main Tournaments Page ── */
 export default function TournamentsPage() {
-  const { user } = useAuth();
+  const { user: authUser } = useAuth();
+  // Only the tournament admin (or admin) may create/edit tournaments
+  const user = ["admin", "tournament-admin"].includes(authUser?.username?.toLowerCase()) ? authUser : null;
   const [tournaments, setTournaments] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [editingTournament, setEditingTournament] = useState(null);

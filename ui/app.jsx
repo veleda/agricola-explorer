@@ -8,6 +8,7 @@ import LiveGame from "./livegame.jsx";
 import ProfilePage from "./profile.jsx";
 import TournamentsPage from "./tournaments.jsx";
 import AdminPage from "./admin.jsx";
+import TournamentAdminPage from "./tournament-admin.jsx";
 import { track } from "./track.js";
 import { AuthProvider, useAuth, SignInModal } from "./auth.jsx";
 
@@ -1035,6 +1036,7 @@ const NAV_ITEMS = [
   { mode: "live", emoji: "\uD83C\uDFAF", title: "Live Draft", desc: "Draft with friends at the table" },
   { mode: "tournament", emoji: "\uD83C\uDFC6", title: "Tournaments", desc: "Tournaments & game nights" },
   { mode: "profile", emoji: "\uD83D\uDC64", title: "My Agricola", desc: "Favourites, combos & games", authOnly: true },
+  { mode: "td", emoji: "\uD83C\uDFB2", title: "Tournament admin", desc: "Participants, table draw & live sheet", tdOnly: true },
   { mode: "admin", emoji: "\uD83D\uDEE0\uFE0F", title: "Admin", desc: "Traffic statistics & users", adminOnly: true },
 ];
 
@@ -1068,7 +1070,8 @@ function NavDrawer({ open, onClose, appMode, onNavigate, E, user, isMobile, onSi
   }, [open, onClose]);
 
   const isAdmin = user?.username?.toLowerCase() === "admin";
-  const items = NAV_ITEMS.filter(n => (!n.mobileOnly || isMobile) && (!n.authOnly || user) && (!n.adminOnly || isAdmin));
+  const isTD = isAdmin || user?.username?.toLowerCase() === "tournament-admin";
+  const items = NAV_ITEMS.filter(n => (!n.mobileOnly || isMobile) && (!n.authOnly || user) && (!n.adminOnly || isAdmin) && (!n.tdOnly || isTD));
   const go = (mode) => { onNavigate(mode); onClose(); };
 
   return (
@@ -1140,7 +1143,7 @@ export default function App() {
     ? "drafter"
     : window.location.pathname.startsWith("/wiki")
     ? "wiki"
-    : (isMobile ? "home" : "explorer");
+    : "score";   // landing page: the score sheet
   // Shared wiki link (/wiki/<slug>) — resolved to a card once cards are loaded
   const initialWikiKey = useRef(
     window.location.pathname.startsWith("/wiki/")
@@ -1148,7 +1151,7 @@ export default function App() {
       : null
   );
   const [appMode, setAppMode] = useState(initialMode);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(initialMode === "drafter");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(initialMode !== "explorer");
   const [handsDraftType, setHandsDraftType] = useState(null); // for linking from drafter
   const [wikiCardId, setWikiCardId] = useState(null); // for linking to wiki from explorer
   const [explorerTheme, setExplorerTheme] = useState("light");
@@ -1170,7 +1173,7 @@ export default function App() {
   // Auto-collapse sidebar when entering drafter/hands, expand when returning to explorer
   const setAppModeWithSidebar = useCallback((mode, opts) => {
     setAppMode(mode);
-    setSidebarCollapsed(mode === "drafter" || mode === "hands" || mode === "score" || mode === "wiki" || mode === "live" || mode === "tournament" || mode === "admin");
+    setSidebarCollapsed(mode === "drafter" || mode === "hands" || mode === "score" || mode === "wiki" || mode === "live" || mode === "tournament" || mode === "admin" || mode === "td");
     if (opts?.draftType) setHandsDraftType(opts.draftType);
     if (opts?.wikiCardId) setWikiCardId(opts.wikiCardId);
     else if (mode === "wiki" && !opts?.wikiCardId) setWikiCardId(null);
@@ -1249,7 +1252,7 @@ export default function App() {
 
   // Sync body background to prevent dark flash on mobile overscroll
   useEffect(() => {
-    const isLightMode = appMode === "drafter" || appMode === "hands" || appMode === "score" || appMode === "wiki" || appMode === "live" || appMode === "profile" || appMode === "tournament" || appMode === "admin";
+    const isLightMode = appMode === "drafter" || appMode === "hands" || appMode === "score" || appMode === "wiki" || appMode === "live" || appMode === "profile" || appMode === "tournament" || appMode === "admin" || appMode === "td";
     document.body.style.background = isLightMode ? "#faf9f7" : E.bg;
   }, [appMode, E.bg]);
 
@@ -1694,7 +1697,7 @@ export default function App() {
       );
     }
 
-    if (appMode === "drafter" || appMode === "hands" || appMode === "score" || appMode === "wiki" || appMode === "live" || appMode === "profile" || appMode === "tournament" || appMode === "admin") {
+    if (appMode === "drafter" || appMode === "hands" || appMode === "score" || appMode === "wiki" || appMode === "live" || appMode === "profile" || appMode === "tournament" || appMode === "admin" || appMode === "td") {
       return (
         <div style={{ display: "flex", flexDirection: "column", height: "100dvh", width: "100%", overflow: "hidden", background: E.bg, color: E.textSecondary, fontFamily: "Inter, system-ui, sans-serif" }}>
           {/* Mobile drafter/hands/score/wiki header */}
@@ -1727,6 +1730,8 @@ export default function App() {
               ? <TournamentsPage />
               : appMode === "admin"
               ? <AdminPage />
+              : appMode === "td"
+              ? <TournamentAdminPage />
               : <ScoreSheet allCards={activeCards} />
             }
           </div>
@@ -2115,6 +2120,10 @@ export default function App() {
       ) : appMode === "admin" ? (
         <div style={{ flex: 1, overflow: "hidden" }}>
           <AdminPage />
+        </div>
+      ) : appMode === "td" ? (
+        <div style={{ flex: 1, overflow: "hidden" }}>
+          <TournamentAdminPage />
         </div>
       ) : (
       <>

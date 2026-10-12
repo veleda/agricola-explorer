@@ -264,6 +264,16 @@ def _create_session(conn, user_id: str) -> str:
 # The admin password is never stored in code: set the ADMIN_PASSWORD env var
 # (locally: export ADMIN_PASSWORD=...; on Fly: fly secrets set ADMIN_PASSWORD=...).
 ADMIN_USERNAME = "admin"
+TD_USERNAME = "tournament-admin"   # tournament director (password: TOURNAMENT_ADMIN_PASSWORD)
+RESERVED_USERNAMES = {ADMIN_USERNAME, TD_USERNAME}
+
+def _is_td(user: Optional[dict]) -> bool:
+    """Tournament director: may create/edit tournaments, draw tables and correct scores."""
+    return bool(user) and user.get("username", "").lower() in RESERVED_USERNAMES
+
+def _require_td(request: Request) -> Optional[dict]:
+    user = _get_current_user(request)
+    return user if _is_td(user) else None
 
 def _is_admin(user: Optional[dict]) -> bool:
     return bool(user) and user.get("username", "").lower() == ADMIN_USERNAME
@@ -272,26 +282,31 @@ def _require_admin(request: Request) -> Optional[dict]:
     user = _get_current_user(request)
     return user if _is_admin(user) else None
 
-def _ensure_admin_account() -> None:
-    pw = os.environ.get("ADMIN_PASSWORD", "")
+def _ensure_account(username: str, display: str, env_var: str) -> None:
+    pw = os.environ.get(env_var, "")
     if not pw:
-        print("[admin] ADMIN_PASSWORD not set — admin account not provisioned")
+        print(f"[admin] {env_var} not set — '{username}' account not provisioned")
         return
     conn = _get_db()
-    row = conn.execute("SELECT id, passwordHash FROM users WHERE username = ? COLLATE NOCASE", (ADMIN_USERNAME,)).fetchone()
+    row = conn.execute("SELECT id, passwordHash FROM users WHERE username = ? COLLATE NOCASE", (username,)).fetchone()
     if row is None:
         conn.execute(
             "INSERT INTO users (id, username, displayName, passwordHash, createdAt) VALUES (?, ?, ?, ?, ?)",
-            (str(uuid.uuid4()), ADMIN_USERNAME, "Admin", _hash_password(pw), datetime.datetime.utcnow().isoformat()),
+            (str(uuid.uuid4()), username, display, _hash_password(pw), datetime.datetime.utcnow().isoformat()),
         )
         conn.commit()
-        print("[admin] Admin account created")
+        print(f"[admin] '{username}' account created")
     elif not _verify_password(pw, dict(row)["passwordHash"] or ""):
-        # Password changed via env var: update it and sign out existing admin sessions
+        # Password changed via env var: update it and sign out existing sessions
         conn.execute("UPDATE users SET passwordHash = ? WHERE id = ?", (_hash_password(pw), dict(row)["id"]))
         conn.execute("DELETE FROM sessions WHERE userId = ?", (dict(row)["id"],))
         conn.commit()
-        print("[admin] Admin password updated")
+        print(f"[admin] '{username}' password updated")
+
+
+def _ensure_admin_account() -> None:
+    _ensure_account(ADMIN_USERNAME, "Admin", "ADMIN_PASSWORD")
+    _ensure_account(TD_USERNAME, "Tournament admin", "TOURNAMENT_ADMIN_PASSWORD")
 
 
 # ── Auth endpoints ──────────────────────────────────────────────────────────
@@ -316,7 +331,7 @@ def register(body: RegisterBody):
         return JSONResponse({"error": "Password must be at least 4 characters"}, status_code=400)
     try:
         conn = _get_db()
-        if uname.lower() == ADMIN_USERNAME:
+        if uname.lower() in RESERVED_USERNAMES:
             return JSONResponse({"error": "That username is reserved"}, status_code=409)
         taken = conn.execute("SELECT id FROM users WHERE username = ? COLLATE NOCASE", (uname,)).fetchone()
         if taken:
@@ -548,6 +563,7 @@ class TournamentBody(BaseModel):
     isActive: bool = True
     hasFinal: bool = False
     finalWeight: float = 1.25
+    tableFill: str = "3"      # "3" or "5": extra tables when players don't divide by 4
 
 def _tournament_row(r) -> dict:
     d = dict(r)
@@ -555,6 +571,11 @@ def _tournament_row(r) -> dict:
     d["isActive"] = bool(d["isActive"])
     d["hasFinal"] = bool(d.get("hasFinal"))
     d["finalWeight"] = d.get("finalWeight") if d.get("finalWeight") is not None else 1.25
+    d["tableFill"] = str(d.get("tableFill") or "3")
+    try:
+        d["draw"] = json.loads(d["draw"]) if d.get("draw") else None
+    except (TypeError, ValueError):
+        d["draw"] = None
     return d
 
 @app.get("/api/tournaments", summary="List all tournaments")
@@ -576,39 +597,39 @@ def get_tournament(tournament_id: str):
 
 @app.post("/api/tournaments", summary="Create a tournament")
 def create_tournament(body: TournamentBody, request: Request):
-    user = _get_current_user(request)
+    user = _require_td(request)
     if not user:
-        return JSONResponse({"error": "Not logged in"}, status_code=401)
+        return JSONResponse({"error": "Tournament admin only"}, status_code=403)
     conn = _get_db()
     tid = str(uuid.uuid4())
     now = datetime.datetime.utcnow().isoformat()
     conn.execute(
-        "INSERT INTO tournaments (id, name, startDate, endDate, numGames, numTables, players, isActive, createdBy, createdAt, hasFinal, finalWeight) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO tournaments (id, name, startDate, endDate, numGames, numTables, players, isActive, createdBy, createdAt, hasFinal, finalWeight, tableFill) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (tid, body.name.strip(), body.startDate, body.endDate, body.numGames, body.numTables, json.dumps(body.players), 1 if body.isActive else 0, user["id"], now,
-         1 if body.hasFinal else 0, body.finalWeight)
+         1 if body.hasFinal else 0, body.finalWeight, body.tableFill if body.tableFill in ("3", "5") else "3")
     )
     conn.commit()
     return {"ok": True, "id": tid}
 
 @app.put("/api/tournaments/{tournament_id}", summary="Update a tournament")
 def update_tournament(tournament_id: str, body: TournamentBody, request: Request):
-    user = _get_current_user(request)
+    user = _require_td(request)
     if not user:
-        return JSONResponse({"error": "Not logged in"}, status_code=401)
+        return JSONResponse({"error": "Tournament admin only"}, status_code=403)
     conn = _get_db()
     conn.execute(
-        "UPDATE tournaments SET name=?, startDate=?, endDate=?, numGames=?, numTables=?, players=?, isActive=?, hasFinal=?, finalWeight=? WHERE id=?",
+        "UPDATE tournaments SET name=?, startDate=?, endDate=?, numGames=?, numTables=?, players=?, isActive=?, hasFinal=?, finalWeight=?, tableFill=? WHERE id=?",
         (body.name.strip(), body.startDate, body.endDate, body.numGames, body.numTables, json.dumps(body.players), 1 if body.isActive else 0,
-         1 if body.hasFinal else 0, body.finalWeight, tournament_id)
+         1 if body.hasFinal else 0, body.finalWeight, body.tableFill if body.tableFill in ("3", "5") else "3", tournament_id)
     )
     conn.commit()
     return {"ok": True}
 
 @app.patch("/api/tournaments/{tournament_id}/toggle", summary="Toggle tournament active status")
 def toggle_tournament(tournament_id: str, request: Request):
-    user = _get_current_user(request)
+    user = _require_td(request)
     if not user:
-        return JSONResponse({"error": "Not logged in"}, status_code=401)
+        return JSONResponse({"error": "Tournament admin only"}, status_code=403)
     conn = _get_db()
     conn.execute("UPDATE tournaments SET isActive = CASE WHEN isActive = 1 THEN 0 ELSE 1 END WHERE id = ?", (tournament_id,))
     conn.commit()
@@ -617,9 +638,9 @@ def toggle_tournament(tournament_id: str, request: Request):
 
 @app.delete("/api/tournaments/{tournament_id}", summary="Delete a tournament (scores are kept)")
 def delete_tournament(tournament_id: str, request: Request):
-    user = _get_current_user(request)
+    user = _require_td(request)
     if not user:
-        return JSONResponse({"error": "Not logged in"}, status_code=401)
+        return JSONResponse({"error": "Tournament admin only"}, status_code=403)
     conn = _get_db()
     # Clear tournamentId on scores but keep the scores + tournament name text
     conn.execute("UPDATE scores SET tournamentId = NULL WHERE tournamentId = ?", (tournament_id,))
@@ -672,6 +693,145 @@ def _xlsx_export_response(tour: dict, scores: list[dict]):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename=\"{safe.encode('ascii', 'ignore').decode() or 'tournament'}.xlsx\"; filename*=UTF-8''{quote(tour['name'])}.xlsx"},
     )
+
+
+# ── Tournament director tools: draw, final seating, live sheet ──────────────
+try:
+    import tournament_draw as _tdraw
+    import tournament_sheet as _tsheet
+    from tournament_export import participant_label as _plabel
+except ModuleNotFoundError:
+    from backend import tournament_draw as _tdraw
+    from backend import tournament_sheet as _tsheet
+    from backend.tournament_export import participant_label as _plabel
+
+
+def _load_tournament(conn, tournament_id: str) -> Optional[dict]:
+    row = conn.execute("SELECT * FROM tournaments WHERE id = ?", (tournament_id,)).fetchone()
+    return _tournament_row(row) if row else None
+
+
+def _tournament_scores(conn, tour: dict) -> list[dict]:
+    return [dict(r) for r in conn.execute(
+        "SELECT * FROM scores WHERE tournamentId = ? OR tournament = ? ORDER BY timestamp",
+        (tour["id"], tour["name"])).fetchall()]
+
+
+def _participants(tour: dict) -> list[str]:
+    seen, out = set(), []
+    for p in tour.get("players") or []:
+        label = _plabel(p)
+        if label and label.casefold() not in seen:
+            seen.add(label.casefold()); out.append(label)
+    return out
+
+
+def _save_draw(conn, tournament_id: str, draw: Optional[dict]):
+    conn.execute("UPDATE tournaments SET draw = ? WHERE id = ?", (json.dumps(draw) if draw else None, tournament_id))
+    conn.commit()
+
+
+class DrawRequest(BaseModel):
+    numGames: int
+    numTables: Optional[int] = None
+    tableFill: Optional[str] = None
+    seed: Optional[int] = None
+
+
+@app.post("/api/tournaments/{tournament_id}/draw", summary="Draw tables for all preliminary games (tournament admin)")
+def make_draw(tournament_id: str, body: DrawRequest, request: Request):
+    if not _require_td(request):
+        return JSONResponse({"error": "Tournament admin only"}, status_code=403)
+    conn = _get_db()
+    tour = _load_tournament(conn, tournament_id)
+    if not tour:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    names = _participants(tour)
+    if len(names) < 3:
+        return JSONResponse({"error": "Add at least 3 participants before drawing tables"}, status_code=400)
+    if not 1 <= body.numGames <= 20:
+        return JSONResponse({"error": "Number of games must be between 1 and 20"}, status_code=400)
+    fill = body.tableFill if body.tableFill in ("3", "5") else tour["tableFill"]
+    sizes = _tdraw.table_sizes(len(names), fill, body.numTables or None)
+    seed = body.seed if body.seed is not None else secrets.randbelow(1 << 30)
+    rounds, stats = _tdraw.best_draw(names, body.numGames, sizes, seed=seed, time_budget=2.0)
+    draw = {"rounds": rounds, "final": None, "sizes": sizes, "stats": stats, "seed": seed,
+            "createdAt": datetime.datetime.utcnow().isoformat(), "warnings": _tdraw.size_warnings(sizes)}
+    conn.execute("UPDATE tournaments SET numGames = ?, numTables = ?, tableFill = ? WHERE id = ?",
+                 (body.numGames, body.numTables or 0, fill, tournament_id))
+    _save_draw(conn, tournament_id, draw)
+    return _load_tournament(conn, tournament_id)
+
+
+class DrawEditRequest(BaseModel):
+    rounds: list
+    final: Optional[list] = None
+
+
+@app.put("/api/tournaments/{tournament_id}/draw", summary="Edit the table draw manually (tournament admin)")
+def edit_draw(tournament_id: str, body: DrawEditRequest, request: Request):
+    if not _require_td(request):
+        return JSONResponse({"error": "Tournament admin only"}, status_code=403)
+    conn = _get_db()
+    tour = _load_tournament(conn, tournament_id)
+    if not tour:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    for i, rnd in enumerate(body.rounds + ([body.final] if body.final else [])):
+        flat = [" ".join(str(n).split()) for tbl in rnd for n in tbl]
+        if len({n.casefold() for n in flat}) != len(flat):
+            return JSONResponse({"error": f"A player is seated twice in {'the final' if body.final and i == len(body.rounds) else f'game {i + 1}'}"}, status_code=400)
+    draw = dict(tour.get("draw") or {})
+    draw["rounds"] = [[[" ".join(str(n).split()) for n in tbl] for tbl in rnd] for rnd in body.rounds]
+    draw["final"] = [[" ".join(str(n).split()) for n in tbl] for tbl in body.final] if body.final else None
+    draw["stats"] = _tdraw.draw_stats(_participants(tour), draw["rounds"])
+    draw["editedAt"] = datetime.datetime.utcnow().isoformat()
+    _save_draw(conn, tournament_id, draw)
+    return _load_tournament(conn, tournament_id)
+
+
+@app.delete("/api/tournaments/{tournament_id}/draw", summary="Remove the table draw (tournament admin)")
+def delete_draw(tournament_id: str, request: Request):
+    if not _require_td(request):
+        return JSONResponse({"error": "Tournament admin only"}, status_code=403)
+    conn = _get_db()
+    _save_draw(conn, tournament_id, None)
+    return _load_tournament(conn, tournament_id)
+
+
+@app.post("/api/tournaments/{tournament_id}/seat-final", summary="Seat the final by standings (tournament admin)")
+def seat_final(tournament_id: str, request: Request):
+    if not _require_td(request):
+        return JSONResponse({"error": "Tournament admin only"}, status_code=403)
+    conn = _get_db()
+    tour = _load_tournament(conn, tournament_id)
+    if not tour:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    draw = dict(tour.get("draw") or {})
+    if not draw.get("rounds"):
+        return JSONResponse({"error": "Draw the preliminary games first"}, status_code=400)
+    prelim = {**tour, "draw": {**draw, "final": None}}
+    scores = [s for s in _tournament_scores(conn, tour)
+              if not str(s.get("gameNumber") or "").strip().lower().startswith("f")]
+    sheet = _tsheet.compute_sheet(prelim, scores)
+    ranked = [s["name"] for s in sheet["standings"]]
+    names = _participants(tour)
+    ranked += [n for n in names if n not in ranked]
+    sizes = draw.get("sizes") or _tdraw.table_sizes(len(ranked), tour["tableFill"])
+    draw["final"] = _tdraw.seat_final(ranked, sizes)
+    draw["finalSeatedAt"] = datetime.datetime.utcnow().isoformat()
+    draw["finalMissingScores"] = len(sheet["missing"])
+    conn.execute("UPDATE tournaments SET hasFinal = 1 WHERE id = ?", (tournament_id,))
+    _save_draw(conn, tournament_id, draw)
+    return _load_tournament(conn, tournament_id)
+
+
+@app.get("/api/tournaments/{tournament_id}/sheet", summary="Live tournament spreadsheet (rounds, tables, standings)")
+def tournament_sheet(tournament_id: str):
+    conn = _get_db()
+    tour = _load_tournament(conn, tournament_id)
+    if not tour:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    return _tsheet.compute_sheet(tour, _tournament_scores(conn, tour))
 
 
 # ── Analytics (anonymous, cookie-free page-view counting) ───────────────────
@@ -849,7 +1009,7 @@ def export_event_xlsx(event_name: str):
 @app.get("/api/users", summary="List registered usernames (public)")
 def list_users():
     conn = _get_db()
-    rows = conn.execute("SELECT username, displayName FROM users WHERE username != ? COLLATE NOCASE ORDER BY username", (ADMIN_USERNAME,)).fetchall()
+    rows = conn.execute("SELECT username, displayName FROM users WHERE username NOT IN (?, ?) COLLATE NOCASE ORDER BY username", (ADMIN_USERNAME, TD_USERNAME)).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -1287,6 +1447,10 @@ def _get_db() -> sqlite3.Connection:
         conn.execute("ALTER TABLE tournaments ADD COLUMN hasFinal INTEGER DEFAULT 0")
     if "finalWeight" not in t_cols:
         conn.execute("ALTER TABLE tournaments ADD COLUMN finalWeight REAL DEFAULT 1.25")
+    if "tableFill" not in t_cols:
+        conn.execute("ALTER TABLE tournaments ADD COLUMN tableFill TEXT DEFAULT '3'")
+    if "draw" not in t_cols:
+        conn.execute("ALTER TABLE tournaments ADD COLUMN draw TEXT")
 
     # ── Migration: add user_id to existing tables ────────────────────────────
     for tbl in ["drafts", "scores"]:
@@ -1976,24 +2140,48 @@ def list_scores(q: str = "", page: int = 1, pageSize: int = 20):
 
 
 class ScoreDeleteRequest(BaseModel):
-    confirmName: str  # must match the player name on the score
+    confirmName: str = ""  # must match the player name on the score (not needed for tournament admin)
 
 @app.delete("/api/scores/{score_id}", summary="Delete a score",
              description="Delete a score by ID. Requires the player name to confirm.")
-def delete_score(score_id: str, req: ScoreDeleteRequest):
+def delete_score(score_id: str, req: ScoreDeleteRequest, request: Request):
     conn = _get_db()
     row = conn.execute("SELECT name FROM scores WHERE id = ?", (score_id,)).fetchone()
     if not row:
         conn.close()
         return JSONResponse(status_code=404, content={"error": "Score not found"})
 
-    if req.confirmName.strip().lower() != row["name"].strip().lower():
+    if not _is_td(_get_current_user(request)) and req.confirmName.strip().lower() != row["name"].strip().lower():
         conn.close()
         return JSONResponse(status_code=403, content={"error": "Player name does not match"})
 
     conn.execute("DELETE FROM scores WHERE id = ?", (score_id,))
     conn.commit()
     conn.close()
+    return {"ok": True}
+
+
+class ScoreEditRequest(BaseModel):
+    total: Optional[int] = None
+    name: Optional[str] = None
+    gameNumber: Optional[str] = None
+    tableNumber: Optional[str] = None
+
+
+@app.put("/api/scores/{score_id}", summary="Correct a score (tournament admin)")
+def edit_score(score_id: str, body: ScoreEditRequest, request: Request):
+    if not _require_td(request):
+        return JSONResponse({"error": "Tournament admin only"}, status_code=403)
+    conn = _get_db()
+    if not conn.execute("SELECT id FROM scores WHERE id = ?", (score_id,)).fetchone():
+        return JSONResponse({"error": "Score not found"}, status_code=404)
+    fields = {k: v for k, v in body.model_dump().items() if v is not None}
+    if "name" in fields:
+        fields["name"] = " ".join(fields["name"].split())
+    if fields:
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        conn.execute(f"UPDATE scores SET {sets} WHERE id = ?", (*fields.values(), score_id))
+        conn.commit()
     return {"ok": True}
 
 

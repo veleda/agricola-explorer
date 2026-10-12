@@ -895,6 +895,31 @@ export default function ScoreSheet({ allCards = [] }) {
   const [tableNumber, setTableNumber] = useState("");
   const [gameNumber, setGameNumber] = useState("");
   const [startingPosition, setStartingPosition] = useState("");
+
+  // ── Tournament participants & draw (filled in by the tournament admin) ──
+  const selTour = activeTournaments.find(t => t.id === tournamentId) || null;
+  const participants = useMemo(() => (selTour?.players || [])
+    .map(p => (p.displayName || p.name || p.username || "").trim()).filter(Boolean)
+    .sort((a, b) => a.localeCompare(b, "nb")), [selTour]);
+  const gameOptions = useMemo(() => {
+    if (!selTour) return [];
+    const n = Math.max(selTour.draw?.rounds?.length || 0, selTour.numGames || 0);
+    const opts = Array.from({ length: n }, (_, i) => String(i + 1));
+    if (selTour.hasFinal || selTour.draw?.final) opts.push("Final");
+    return opts;
+  }, [selTour]);
+  const seatInfo = useMemo(() => {
+    const draw = selTour?.draw;
+    if (!draw || !name || !gameNumber) return null;
+    const isFinal = /^f/i.test(gameNumber);
+    const rnd = isFinal ? draw.final : draw.rounds?.[parseInt(gameNumber, 10) - 1];
+    if (!rnd) return null;
+    const idx = rnd.findIndex(tbl => tbl.some(n => n.toLowerCase() === name.trim().toLowerCase()));
+    if (idx < 0) return null;
+    return { table: idx + 1, label: isFinal ? "Final" : `Game ${gameNumber}`,
+             others: rnd[idx].filter(n => n.toLowerCase() !== name.trim().toLowerCase()) };
+  }, [selTour, name, gameNumber]);
+  useEffect(() => { if (seatInfo) setTableNumber(String(seatInfo.table)); }, [seatInfo]);
   const [values, setValues] = useState(defaultValues);
   const [showRef, setShowRef] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -1184,26 +1209,6 @@ export default function ScoreSheet({ allCards = [] }) {
           background: T.surface, borderRadius: 14, border: `1px solid ${T.border}`,
           padding: "16px 18px", marginBottom: 16,
         }}>
-          {/* Player name */}
-          <div style={{ marginBottom: 12 }}>
-            <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: T.textSecondary, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>
-              Player name <span style={{ color: T.red }}>*</span>
-            </label>
-            <input
-              type="text" value={name} onChange={e => setName(e.target.value)}
-              placeholder="Your name"
-              style={{
-                width: "100%", padding: "8px 12px", borderRadius: 8,
-                border: `1.5px solid ${name ? T.border : T.accent + "60"}`,
-                background: T.bg, fontSize: 14, color: T.text,
-                outline: "none", transition: "border-color 0.15s",
-                boxSizing: "border-box",
-              }}
-              onFocus={e => e.target.style.borderColor = T.accent}
-              onBlur={e => e.target.style.borderColor = name ? T.border : T.accent + "60"}
-            />
-          </div>
-
           {/* Tournament / Game night */}
           <div style={{ marginBottom: 12 }}>
             <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: T.textSecondary, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>
@@ -1254,6 +1259,45 @@ export default function ScoreSheet({ allCards = [] }) {
             )}
           </div>
 
+          {/* Player name (pick from the participant list when the tournament has one) */}
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: T.textSecondary, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>
+              Player name <span style={{ color: T.red }}>*</span>
+            </label>
+            {participants.length > 0 ? (
+              <select value={participants.includes(name) ? name : ""} onChange={e => setName(e.target.value)}
+                style={{
+                  width: "100%", padding: "8px 12px", borderRadius: 8,
+                  border: `1.5px solid ${name ? T.border : T.accent + "60"}`,
+                  background: T.bg, fontSize: 14, color: name ? T.text : T.textMuted,
+                  outline: "none", boxSizing: "border-box", cursor: "pointer",
+                }}>
+                <option value="">— Choose your name —</option>
+                {participants.map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+            ) : (
+            <input
+              type="text" value={name} onChange={e => setName(e.target.value)}
+              placeholder="Your name"
+              style={{
+                width: "100%", padding: "8px 12px", borderRadius: 8,
+                border: `1.5px solid ${name ? T.border : T.accent + "60"}`,
+                background: T.bg, fontSize: 14, color: T.text,
+                outline: "none", transition: "border-color 0.15s",
+                boxSizing: "border-box",
+              }}
+              onFocus={e => e.target.style.borderColor = T.accent}
+              onBlur={e => e.target.style.borderColor = name ? T.border : T.accent + "60"}
+            />
+            )}
+            {seatInfo && (
+              <div style={{ fontSize: 12, color: T.green, marginTop: 6 }}>
+                {"✓"} {seatInfo.label}: table {seatInfo.table}
+                {seatInfo.others.length > 0 && <> with {seatInfo.others.join(", ")}</>}
+              </div>
+            )}
+          </div>
+
           {/* Table number + Game number + Starting position — side by side */}
           <div style={{ display: "flex", gap: 10 }}>
             <div style={{ flex: 1 }}>
@@ -1277,6 +1321,18 @@ export default function ScoreSheet({ allCards = [] }) {
               <label style={{ display: "block", fontSize: 10, fontWeight: 600, color: T.textMuted, marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.5 }}>
                 Game #
               </label>
+              {gameOptions.length > 0 ? (
+                <select value={gameNumber} onChange={e => setGameNumber(e.target.value)}
+                  style={{
+                    width: "100%", padding: "6px 8px", borderRadius: 8,
+                    border: `1.5px solid ${T.border}`, background: T.bg,
+                    fontSize: 13, color: gameNumber ? T.text : T.textMuted, outline: "none",
+                    boxSizing: "border-box", cursor: "pointer",
+                  }}>
+                  <option value="">—</option>
+                  {gameOptions.map(g => <option key={g} value={g}>{g}</option>)}
+                </select>
+              ) : (
               <input
                 type="text" value={gameNumber} onChange={e => setGameNumber(e.target.value)}
                 placeholder="—"
@@ -1289,6 +1345,7 @@ export default function ScoreSheet({ allCards = [] }) {
                 onFocus={e => e.target.style.borderColor = T.accent}
                 onBlur={e => e.target.style.borderColor = T.border}
               />
+              )}
             </div>
             <div style={{ flex: 1 }}>
               <label style={{ display: "block", fontSize: 10, fontWeight: 600, color: T.textMuted, marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.5 }}>

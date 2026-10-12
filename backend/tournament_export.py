@@ -125,11 +125,18 @@ def _put(ws, row, col, value, comment=None):
 
 # ── data preparation ───────────────────────────────────────────────────────
 
-def _prepare(tournament: dict, scores: list[dict]):
+def participant_label(p: dict) -> str:
+    return " ".join((p.get("displayName") or p.get("name") or p.get("username") or "").split())
+
+
+def _prepare(tournament: dict, scores: list[dict], include_empty_draw_rounds: bool = False):
     """Return (players, rounds, notes).
 
     players: list of dicts {key, name, full, init_no, start_no, rand}
-    rounds:  list of dicts {game, tables: [(table_label, [player_key, ...])], scores: {key: total}}
+    rounds:  list of dicts {game, tables: [(table_label, [player_key, ...])],
+                            scores: {key: total}, ids: {key: score_id}}
+    Seating comes from the tournament draw when there is one, otherwise from
+    the table numbers on the registered scores.
     """
     notes = []
     # Latest score per (game, player)
@@ -144,16 +151,18 @@ def _prepare(tournament: dict, scores: list[dict]):
             continue
         latest[(g, _ident(name))] = {**s, "name": name, "game": g}
 
-    # Players
+    # Players: registered participants first, then anyone else with a score
     display: dict[str, str] = {}
-    for (_, key), s in latest.items():
-        display.setdefault(key, s["name"])
     full_names = {}
     for p in tournament.get("players") or []:
-        label = p.get("displayName") or p.get("name") or p.get("username") or ""
+        label = participant_label(p)
+        if label:
+            display.setdefault(_ident(label), label)
         for cand in (p.get("username"), p.get("displayName"), p.get("name")):
             if cand:
                 full_names.setdefault(_ident(cand), label)
+    for (_, key), s in latest.items():
+        display.setdefault(key, s["name"])
     keys = sorted(display, key=lambda k: _nb_key(display[k]))
     rng = random.Random(str(tournament.get("id") or tournament.get("name")))
     rand = {k: rng.random() for k in keys}
@@ -165,21 +174,38 @@ def _prepare(tournament: dict, scores: list[dict]):
             "init_no": i, "rand": rand[k], "start_no": by_rand.index(k) + 1,
         })
 
-    # Rounds
+    # Draw: game number -> [[names at table 1], [names at table 2], ...]
+    draw = tournament.get("draw") or {}
+    drawn: dict[int, list[list[str]]] = {i + 1: rnd for i, rnd in enumerate(draw.get("rounds") or [])}
+    if draw.get("final"):
+        drawn[FINAL_GAME] = draw["final"]
+
+    games = {g for (g, _) in latest}
+    if include_empty_draw_rounds:
+        games |= set(drawn)
     rounds = []
-    for g in sorted({g for (g, _) in latest}):
+    for g in sorted(games):
         entries = [s for (gg, _), s in latest.items() if gg == g]
         tables: dict = {}
+        seated = set()
+        for ti, names in enumerate(drawn.get(g) or [], start=1):
+            ks = [_ident(n) for n in names]
+            tables[ti] = ks
+            seated.update(ks)
         for s in entries:
+            k = _ident(s["name"])
+            if k in seated:
+                continue
             t = _to_int(s.get("tableNumber"))
-            tables.setdefault(t if t is not None else "?", []).append(_ident(s["name"]))
+            tables.setdefault(t if t is not None else "?", []).append(k)
         if "?" in tables:
-            notes.append(f"Game {g}: {len(tables['?'])} score(s) without table number were grouped as table '?'.")
+            notes.append(f"Game {g if g != FINAL_GAME else 'Final'}: {len(tables['?'])} score(s) without table number were grouped as table '?'.")
         order = sorted(tables, key=lambda t: (t == "?", t if t != "?" else 0))
         rounds.append({
             "game": g,
             "tables": [(t, tables[t]) for t in order],
             "scores": {_ident(s["name"]): s.get("total") for s in entries},
+            "ids": {_ident(s["name"]): s.get("id") for s in entries},
         })
     return players, rounds, notes
 
@@ -266,7 +292,7 @@ def build_tournament_workbook(tournament: dict, scores: list[dict]) -> bytes:
         played = set()
         groups = []
         for t, keys in rnd["tables"]:
-            keys = [x for x in keys if x in P and x not in played]
+            keys = [x for x in keys if x in P and x not in played and x in rnd["scores"]]
             if not keys:
                 continue
             played.update(keys)
