@@ -160,7 +160,7 @@ def _prepare(tournament: dict, scores: list[dict], include_empty_draw_rounds: bo
             display.setdefault(_ident(label), label)
         for cand in (p.get("username"), p.get("displayName"), p.get("name")):
             if cand:
-                full_names.setdefault(_ident(cand), label)
+                full_names.setdefault(_ident(cand), p.get("fullName") or label)
     for (_, key), s in latest.items():
         display.setdefault(key, s["name"])
     keys = sorted(display, key=lambda k: _nb_key(display[k]))

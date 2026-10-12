@@ -531,6 +531,86 @@ function SheetTab({ tour }) {
   );
 }
 
+/* ───────────────────────── Import from Excel ───────────────────────── */
+function ImportPanel({ file, onClose, onImported }) {
+  const [data, setData] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [name, setName] = useState("");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [busy, setBusy] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const b64 = String(reader.result).split(",").pop();
+      setData(b64);
+      try {
+        const r = await api("/api/tournaments/import", { method: "POST", body: { filename: file.name, data: b64, dryRun: true } });
+        setPreview(r.preview); setName(r.preview.name); setStartDate(r.preview.startDate); setEndDate(r.preview.endDate);
+      } catch (e) { setError(e.message); }
+      setBusy(false);
+    };
+    reader.onerror = () => { setError("Could not read the file"); setBusy(false); };
+    reader.readAsDataURL(file);
+  }, [file]);
+
+  const create = async () => {
+    setBusy(true); setError(null);
+    try {
+      const r = await api("/api/tournaments/import", { method: "POST", body: { filename: file.name, data, dryRun: false, name, startDate, endDate } });
+      onImported(r.id, r.preview);
+    } catch (e) { setError(e.message); setBusy(false); }
+  };
+
+  const p = preview;
+  return (
+    <div style={{ ...card, borderColor: T.accent }}>
+      <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: T.text, flex: 1 }}>📥 Import from Excel — {file.name}</div>
+        <button onClick={onClose} style={btn("secondary")}>Cancel</button>
+      </div>
+      {busy && !p && <div style={{ fontSize: 13, color: T.textMuted }}>Reading the sheet…</div>}
+      {error && <div style={{ fontSize: 13, color: T.red, background: T.redBg, padding: "8px 10px", marginBottom: 10 }}>{error}</div>}
+      {p && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 10, marginBottom: 12 }}>
+            <div><label style={label}>Tournament name</label><input value={name} onChange={e => setName(e.target.value)} style={input} /></div>
+            <div><label style={label}>Start date</label><input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={input} /></div>
+            <div><label style={label}>End date</label><input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} style={input} /></div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 8, marginBottom: 12 }}>
+            {[
+              ["Participants", p.participants],
+              ["Games", `${p.numGames}${p.hasFinal ? " + final" : ""}`],
+              ["Tables", `${p.numTables} (${describeSizes(p.sizes)})`],
+              ["Scores", p.scores],
+              ...(p.hasFinal ? [["Final", p.finalSeated ? `seated · ×${p.finalWeight}` : `not seated · ×${p.finalWeight}`]] : []),
+            ].map(([k, v]) => (
+              <div key={k} style={{ background: T.surfaceAlt, padding: "8px 10px" }}>
+                <div style={{ fontSize: 10, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.5 }}>{k}</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>{v}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: 12, color: T.textSecondary, marginBottom: 10, lineHeight: 1.5 }}>
+            <b>Participants:</b> {p.participantNames.join(", ")}
+          </div>
+          {p.warnings.map((w, i) => <div key={i} style={{ fontSize: 12, color: T.accent, marginBottom: 4 }}>⚠ {w}</div>)}
+          <div style={{ fontSize: 11, color: T.textMuted, margin: "8px 0 12px" }}>
+            Seating for every game and all scores in the sheet are imported. Points, ranks and standings are recalculated by the app
+            (manual tie adjustments in the sheet are not imported).
+          </div>
+          <button onClick={create} disabled={busy || !name.trim() || !startDate} style={btn("primary", busy || !name.trim() || !startDate)}>
+            {busy ? "Importing…" : "Create tournament"}
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
 /* ───────────────────────── Page ───────────────────────── */
 export default function TournamentAdminPage({ initialTab = "setup" }) {
   const { user } = useAuth();
@@ -539,6 +619,8 @@ export default function TournamentAdminPage({ initialTab = "setup" }) {
   const [selId, setSelId] = useState(null);
   const [creating, setCreating] = useState(false);
   const [tab, setTab] = useState(initialTab);
+  const [importFile, setImportFile] = useState(null);
+  const [importMsg, setImportMsg] = useState(null);
 
   const loadList = useCallback(async (selectId) => {
     const data = await api("/api/tournaments").catch(() => []);
@@ -569,7 +651,23 @@ export default function TournamentAdminPage({ initialTab = "setup" }) {
           {creating
             ? <button onClick={() => setCreating(false)} style={btn("secondary")}>Cancel</button>
             : <button onClick={() => { setCreating(true); setTab("setup"); }} style={btn("primary")}>+ New tournament</button>}
+          <label style={{ ...btn("secondary"), display: "inline-block" }} title="Create a tournament from a filled-in tournament spreadsheet (NM template)">
+            📥 Import Excel
+            <input type="file" accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style={{ display: "none" }}
+              onChange={e => { const f = e.target.files?.[0]; if (f) { setImportFile(f); setImportMsg(null); } e.target.value = ""; }} />
+          </label>
         </div>
+
+        {importFile && (
+          <ImportPanel key={importFile.name + importFile.lastModified} file={importFile} onClose={() => setImportFile(null)}
+            onImported={async (id, p) => {
+              setImportFile(null); setCreating(false);
+              await loadList(id);
+              setTab(p.scores > 0 ? "sheet" : "draw");
+              setImportMsg(`Imported "${p.name}": ${p.participants} participants, ${p.numGames} games${p.hasFinal ? " + final" : ""}, ${p.scores} scores.`);
+            }} />
+        )}
+        {importMsg && <div style={{ ...card, background: T.greenLight, color: T.green, fontSize: 13 }}>✓ {importMsg}</div>}
 
         {!list ? <div style={{ color: T.textMuted }}>Loading…</div> : creating || !tour ? (
           creating || list.length === 0 ? (

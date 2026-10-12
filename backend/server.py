@@ -825,6 +825,72 @@ def seat_final(tournament_id: str, request: Request):
     return _load_tournament(conn, tournament_id)
 
 
+class ImportRequest(BaseModel):
+    filename: str = ""
+    data: str                      # base64-encoded .xlsx
+    dryRun: bool = True
+    name: Optional[str] = None     # overrides after preview
+    startDate: Optional[str] = None
+    endDate: Optional[str] = None
+
+
+@app.post("/api/tournaments/import", summary="Import a tournament from the NM Excel template (tournament admin)")
+def import_tournament(body: ImportRequest, request: Request):
+    user = _require_td(request)
+    if not user:
+        return JSONResponse({"error": "Tournament admin only"}, status_code=403)
+    try:
+        from tournament_import import parse_tournament_xlsx
+    except ModuleNotFoundError:
+        from backend.tournament_import import parse_tournament_xlsx
+    try:
+        raw = base64.b64decode(body.data.split(",")[-1])
+        if len(raw) > 10 * 1024 * 1024:
+            return JSONResponse({"error": "File is too large (max 10 MB)"}, status_code=400)
+        parsed = parse_tournament_xlsx(raw, body.filename)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        print(f"[import] {e!r}")
+        return JSONResponse({"error": "Could not read this Excel file"}, status_code=400)
+
+    name = (body.name or parsed["name"]).strip()
+    start = body.startDate if body.startDate is not None else parsed["startDate"]
+    end = body.endDate if body.endDate is not None else parsed["endDate"]
+    summary = {
+        "name": name, "startDate": start, "endDate": end,
+        "participants": len(parsed["participants"]), "numGames": parsed["numGames"],
+        "hasFinal": parsed["hasFinal"], "finalWeight": parsed["finalWeight"], "finalSeated": parsed["final"] is not None,
+        "numTables": parsed["numTables"], "sizes": parsed["sizes"], "scores": len(parsed["scores"]),
+        "warnings": parsed["warnings"], "participantNames": [p["name"] for p in parsed["participants"]],
+    }
+    if body.dryRun:
+        return {"ok": True, "preview": summary}
+    if not name or not start:
+        return JSONResponse({"error": "Name and start date are required"}, status_code=400)
+
+    conn = _get_db()
+    tid = str(uuid.uuid4())
+    now = datetime.datetime.utcnow().isoformat()
+    players = [{"name": p["name"], **({"fullName": p["fullName"]} if p.get("fullName") else {})} for p in parsed["participants"]]
+    conn.execute(
+        "INSERT INTO tournaments (id, name, startDate, endDate, numGames, numTables, players, isActive, createdBy, createdAt, hasFinal, finalWeight, tableFill) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (tid, name, start, end, parsed["numGames"], parsed["numTables"], json.dumps(players), 1, user["id"], now,
+         1 if parsed["hasFinal"] else 0, parsed["finalWeight"], parsed["tableFill"]))
+    names = [p["name"] for p in parsed["participants"]]
+    draw = {"rounds": parsed["rounds"], "final": parsed["final"], "sizes": parsed["sizes"],
+            "stats": _tdraw.draw_stats(names, parsed["rounds"]), "importedFrom": body.filename, "createdAt": now,
+            "warnings": _tdraw.size_warnings(parsed["sizes"])}
+    conn.execute("UPDATE tournaments SET draw = ? WHERE id = ?", (json.dumps(draw), tid))
+    for i, sc in enumerate(parsed["scores"]):
+        conn.execute(
+            "INSERT INTO scores (id, name, tournament, tournamentId, tableNumber, gameNumber, startingPosition, valuesJson, pointsJson, total, timestamp, cardLog, userId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (uuid.uuid4().hex[:12], sc["name"], name, tid, str(sc["table"]), sc["game"], None, "{}", "{}", sc["total"],
+             (datetime.datetime.utcnow() + datetime.timedelta(microseconds=i)).isoformat(), None, None))
+    conn.commit()
+    return {"ok": True, "id": tid, "preview": summary}
+
+
 @app.get("/api/tournaments/{tournament_id}/sheet", summary="Live tournament spreadsheet (rounds, tables, standings)")
 def tournament_sheet(tournament_id: str):
     conn = _get_db()
