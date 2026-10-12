@@ -1,0 +1,570 @@
+import { useState, useEffect, useMemo } from "react";
+import { useAuth } from "./auth.jsx";
+
+const API_BASE = "";
+
+const T = {
+  bg: "#faf9f7", surface: "#ffffff", surfaceAlt: "#f5f3f0",
+  border: "#e8e4df", borderLight: "#f0ece7",
+  text: "#1a1a1a", textSecondary: "#6b6560", textMuted: "#9e9790",
+  accent: "#b45309", accentLight: "#fef3c7", accentBg: "#fffbeb",
+  blue: "#2563eb", green: "#059669", greenLight: "#ecfdf5",
+  red: "#dc2626", purple: "#7c3aed",
+};
+
+const CATEGORIES = [
+  { key: "fields", label: "Fields" }, { key: "pastures", label: "Pastures" },
+  { key: "grain", label: "Grain" }, { key: "vegetables", label: "Vegetables" },
+  { key: "sheep", label: "Sheep" }, { key: "wildBoar", label: "Wild boar" },
+  { key: "cattle", label: "Cattle" }, { key: "unusedSpaces", label: "Unused spaces" },
+  { key: "fencedStables", label: "Fenced stables" }, { key: "clayRooms", label: "Clay rooms" },
+  { key: "stoneRooms", label: "Stone rooms" }, { key: "familyMembers", label: "Family" },
+  { key: "pointsForCards", label: "Cards" }, { key: "bonusPoints", label: "Bonus" },
+  { key: "beggingCards", label: "Begging" },
+];
+
+const parsePoints = (s) => {
+  try { return typeof s.pointsJson === "string" ? JSON.parse(s.pointsJson) : (s.points || {}); } catch { return {}; }
+};
+
+/* ── Excel export of tournament statistics ── */
+async function exportTournamentXlsx(tournament, scores, analytics) {
+  const XLSX = await import("xlsx");
+  const wb = XLSX.utils.book_new();
+
+  const summary = [
+    ["Tournament", tournament.name],
+    ["Start date", tournament.startDate || ""],
+    ["End date", tournament.endDate || ""],
+    ["Planned games", tournament.numGames || ""],
+    ["Tables", tournament.numTables || ""],
+    ["Players", (tournament.players || []).map(p => p.displayName || p.name || p.username).join(", ")],
+    [],
+    ["Scores recorded", analytics?.count ?? 0],
+    ["Best score", analytics?.best ?? ""],
+    ["Average score", analytics?.avg ?? ""],
+    ["Worst score", analytics?.worst ?? ""],
+    ["Exported", new Date().toISOString().slice(0, 16).replace("T", " ")],
+  ];
+  const wsSum = XLSX.utils.aoa_to_sheet(summary);
+  wsSum["!cols"] = [{ wch: 18 }, { wch: 40 }];
+  XLSX.utils.book_append_sheet(wb, wsSum, "Summary");
+
+  const lb = [["Rank", "Player", "Games", "Total points", "Average", "Best", "Worst"]];
+  const byPlayer = {};
+  for (const s of scores) (byPlayer[s.name] ||= []).push(s.total);
+  (analytics?.leaderboard || []).forEach((p, i) => {
+    const t = byPlayer[p.name] || [];
+    lb.push([i + 1, p.name, p.games, t.reduce((a, b) => a + b, 0), p.avg, p.best, Math.min(...t)]);
+  });
+  const wsLb = XLSX.utils.aoa_to_sheet(lb);
+  wsLb["!cols"] = [{ wch: 6 }, { wch: 22 }, { wch: 8 }, { wch: 12 }, { wch: 9 }, { wch: 7 }, { wch: 7 }];
+  XLSX.utils.book_append_sheet(wb, wsLb, "Leaderboard");
+
+  const header = ["Player", "Game #", "Table #", "Start pos.", "Total", ...CATEGORIES.map(c => c.label), "Saved"];
+  const rows = scores.map(s => {
+    const pts = parsePoints(s);
+    const num = (v) => (v === null || v === undefined || v === "" ? "" : (isNaN(Number(v)) ? v : Number(v)));
+    return [s.name, num(s.gameNumber), num(s.tableNumber), num(s.startingPosition), s.total,
+      ...CATEGORIES.map(c => pts[c.key] ?? ""), (s.timestamp || "").slice(0, 16).replace("T", " ")];
+  });
+  const wsScores = XLSX.utils.aoa_to_sheet([header, ...rows]);
+  wsScores["!cols"] = header.map((h, i) => ({ wch: i === 0 ? 22 : i === header.length - 1 ? 17 : Math.max(7, h.length + 2) }));
+  wsScores["!autofilter"] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: rows.length, c: header.length - 1 } }) };
+  XLSX.utils.book_append_sheet(wb, wsScores, "All scores");
+
+  const cat = [["Category", "Average points"], ...(analytics?.categoryAvg || []).map(c => [c.label, c.avg])];
+  const wsCat = XLSX.utils.aoa_to_sheet(cat);
+  wsCat["!cols"] = [{ wch: 18 }, { wch: 15 }];
+  XLSX.utils.book_append_sheet(wb, wsCat, "Category averages");
+
+  const safe = (tournament.name || "tournament").replace(/[\\/:*?"<>|]+/g, "").trim() || "tournament";
+  XLSX.writeFile(wb, `${safe} - statistics.xlsx`);
+}
+
+/* ── Analytics panel for a single tournament or event ── */
+function TournamentDetail({ tournament, onClose }) {
+  const [scores, setScores] = useState(null);
+
+  useEffect(() => {
+    const url = tournament.id
+      ? `${API_BASE}/api/tournaments/${tournament.id}/scores`
+      : `${API_BASE}/api/events/${encodeURIComponent(tournament.name)}/scores`;
+    fetch(url)
+      .then(r => r.json())
+      .then(data => setScores(Array.isArray(data) ? data : []))
+      .catch(() => setScores([]));
+  }, [tournament.id, tournament.name]);
+
+  const analytics = useMemo(() => {
+    if (!scores || scores.length === 0) return null;
+    const playerAll = {};
+    for (const s of scores) {
+      const n = s.name;
+      if (!playerAll[n]) playerAll[n] = [];
+      playerAll[n].push(s);
+    }
+    const leaderboard = Object.entries(playerAll).map(([name, games]) => ({
+      name,
+      best: Math.max(...games.map(g => g.total)),
+      avg: Math.round(games.map(g => g.total).reduce((a, b) => a + b, 0) / games.length * 10) / 10,
+      games: games.length,
+    })).sort((a, b) => b.best - a.best);
+
+    const totals = scores.map(s => s.total);
+    const avg = Math.round(totals.reduce((a, b) => a + b, 0) / totals.length * 10) / 10;
+    const best = Math.max(...totals);
+    const worst = Math.min(...totals);
+
+    const bucketSize = 5;
+    const bucketStart = Math.floor(worst / bucketSize) * bucketSize;
+    const bucketEnd = Math.ceil((best + 1) / bucketSize) * bucketSize;
+    const distribution = [];
+    for (let b = bucketStart; b < bucketEnd; b += bucketSize) {
+      distribution.push({ label: `${b}–${b + bucketSize - 1}`, count: totals.filter(t => t >= b && t < b + bucketSize).length });
+    }
+
+    const catSums = {}, catCounts = {};
+    for (const cat of CATEGORIES) { catSums[cat.key] = 0; catCounts[cat.key] = 0; }
+    for (const s of scores) {
+      const pts = parsePoints(s);
+      for (const cat of CATEGORIES) {
+        const v = pts[cat.key];
+        if (v !== undefined && v !== null) { catSums[cat.key] += v; catCounts[cat.key]++; }
+      }
+    }
+    const categoryAvg = CATEGORIES.map(cat => ({
+      ...cat, avg: catCounts[cat.key] ? Math.round(catSums[cat.key] / catCounts[cat.key] * 10) / 10 : null,
+    })).filter(c => c.avg !== null);
+
+    return { leaderboard, avg, best, worst, count: scores.length, distribution, categoryAvg };
+  }, [scores]);
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, gap: 8 }}>
+        <button onClick={onClose} style={{
+          background: "none", border: "none", color: T.accent, fontSize: 13, cursor: "pointer", padding: 0,
+        }}>{"← Back to tournaments"}</button>
+        {scores && scores.length > 0 && (
+          <button onClick={() => exportTournamentXlsx(tournament, scores, analytics).catch(e => { console.error(e); alert("Could not create Excel file"); })}
+            style={{
+              padding: "6px 12px", borderRadius: 8, border: `1px solid ${T.green}`,
+              background: T.greenLight, color: T.green, fontSize: 12, fontWeight: 600, cursor: "pointer",
+              display: "flex", alignItems: "center", gap: 5,
+            }}>
+            {"⬇"} Excel
+          </button>
+        )}
+      </div>
+
+      <h2 style={{ fontSize: 20, fontWeight: 800, color: T.text, marginBottom: 4 }}>{tournament.name}</h2>
+      {(tournament.startDate || tournament.numGames || tournament.numTables) && (
+        <div style={{ fontSize: 12, color: T.textMuted, marginBottom: 16 }}>
+          {tournament.startDate || ""}{tournament.endDate && tournament.endDate !== tournament.startDate ? ` – ${tournament.endDate}` : ""}
+          {tournament.numGames ? ` · ${tournament.numGames} games` : ""}
+          {tournament.numTables ? ` · ${tournament.numTables} tables` : ""}
+        </div>
+      )}
+
+      {/* Players */}
+      {tournament.players?.length > 0 && (
+        <div style={{ background: T.surface, borderRadius: 10, border: `1px solid ${T.borderLight}`, padding: "12px 16px", marginBottom: 16 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: T.textSecondary, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Players ({tournament.players.length})</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {tournament.players.map((p, i) => (
+              <span key={i} style={{
+                padding: "4px 10px", borderRadius: 6, fontSize: 12,
+                background: p.username ? T.accentBg : T.surfaceAlt,
+                color: p.username ? T.accent : T.text,
+                fontWeight: p.username ? 600 : 400,
+              }}>
+                {p.displayName || p.name || p.username}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!scores ? (
+        <div style={{ textAlign: "center", padding: 40, color: T.textMuted }}>Loading scores...</div>
+      ) : scores.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 40, color: T.textMuted }}>
+          <div style={{ fontSize: 28, marginBottom: 8 }}>📋</div>
+          <div>No scores recorded for this tournament yet</div>
+        </div>
+      ) : analytics && (
+        <>
+          {/* Quick stats */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, marginBottom: 16 }}>
+            {[
+              { label: "Games", value: analytics.count, color: T.accent },
+              { label: "Best", value: analytics.best, color: T.green },
+              { label: "Average", value: analytics.avg, color: T.blue },
+              { label: "Worst", value: analytics.worst, color: T.red },
+            ].map(s => (
+              <div key={s.label} style={{ background: T.surface, borderRadius: 10, border: `1px solid ${T.borderLight}`, padding: "10px 8px", textAlign: "center" }}>
+                <div style={{ fontSize: 20, fontWeight: 800, color: s.color }}>{s.value}</div>
+                <div style={{ fontSize: 9, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.5 }}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Leaderboard */}
+          <div style={{ background: T.surface, borderRadius: 10, border: `1px solid ${T.borderLight}`, padding: "12px 16px", marginBottom: 16 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: T.textSecondary, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Leaderboard</div>
+            {analytics.leaderboard.map((p, i) => (
+              <div key={p.name} style={{
+                display: "flex", alignItems: "center", gap: 8, padding: "6px 0",
+                borderBottom: i < analytics.leaderboard.length - 1 ? `1px solid ${T.borderLight}` : "none",
+              }}>
+                <span style={{ width: 20, fontSize: 12, fontWeight: 700, color: i < 3 ? T.accent : T.textMuted, textAlign: "center" }}>{i + 1}</span>
+                <span style={{ flex: 1, fontSize: 13, fontWeight: 500, color: T.text }}>{p.name}</span>
+                <span style={{ fontSize: 11, color: T.textMuted }}>{p.games}g</span>
+                <span style={{ fontSize: 11, color: T.textMuted }}>avg {p.avg}</span>
+                <span style={{ fontSize: 14, fontWeight: 700, color: T.green }}>{p.best}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Score distribution */}
+          {analytics.distribution.length > 0 && (
+            <div style={{ background: T.surface, borderRadius: 10, border: `1px solid ${T.borderLight}`, padding: "12px 16px", marginBottom: 16 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: T.textSecondary, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Score Distribution</div>
+              <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 80 }}>
+                {analytics.distribution.map(b => {
+                  const max = Math.max(...analytics.distribution.map(d => d.count));
+                  const h = max > 0 ? (b.count / max) * 70 : 0;
+                  return (
+                    <div key={b.label} style={{ flex: 1, textAlign: "center" }}>
+                      <div style={{ height: h, background: T.accent, borderRadius: "3px 3px 0 0", minHeight: b.count > 0 ? 4 : 0, margin: "0 auto", maxWidth: 30 }} />
+                      <div style={{ fontSize: 8, color: T.textMuted, marginTop: 2, whiteSpace: "nowrap" }}>{b.label}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Category averages */}
+          {analytics.categoryAvg.length > 0 && (
+            <div style={{ background: T.surface, borderRadius: 10, border: `1px solid ${T.borderLight}`, padding: "12px 16px", marginBottom: 16 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: T.textSecondary, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Category Averages</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 16px" }}>
+                {analytics.categoryAvg.map(c => (
+                  <div key={c.key} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "3px 0" }}>
+                    <span style={{ color: T.textSecondary }}>{c.label}</span>
+                    <span style={{ fontWeight: 700, color: c.avg >= 0 ? T.green : T.red }}>{c.avg > 0 ? "+" : ""}{c.avg}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Individual scores */}
+          <div style={{ background: T.surface, borderRadius: 10, border: `1px solid ${T.borderLight}`, padding: "12px 16px" }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: T.textSecondary, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>All Scores</div>
+            {scores.map((s, i) => (
+              <div key={s.id || i} style={{
+                display: "flex", alignItems: "center", gap: 8, padding: "6px 0",
+                borderBottom: i < scores.length - 1 ? `1px solid ${T.borderLight}` : "none",
+              }}>
+                <span style={{ flex: 1, fontSize: 13, color: T.text }}>{s.name}</span>
+                {s.gameNumber && <span style={{ fontSize: 10, color: T.textMuted }}>G{s.gameNumber}</span>}
+                {s.tableNumber && <span style={{ fontSize: 10, color: T.textMuted }}>T{s.tableNumber}</span>}
+                <span style={{ fontSize: 14, fontWeight: 700, color: s.total >= 0 ? T.accent : T.red }}>{s.total}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ── Add/Edit Tournament form ── */
+function TournamentForm({ onSaved, onCancel, existing, allUsers }) {
+  const [name, setName] = useState(existing?.name || "");
+  const [startDate, setStartDate] = useState(existing?.startDate || "");
+  const [endDate, setEndDate] = useState(existing?.endDate || "");
+  const [numGames, setNumGames] = useState(existing?.numGames || "");
+  const [numTables, setNumTables] = useState(existing?.numTables || "");
+  const [players, setPlayers] = useState(existing?.players || []);
+  const [playerInput, setPlayerInput] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const addPlayer = () => {
+    const val = playerInput.trim();
+    if (!val) return;
+    // Check if it matches a registered user
+    const matchedUser = allUsers.find(u => u.username.toLowerCase() === val.toLowerCase() || u.displayName.toLowerCase() === val.toLowerCase());
+    if (matchedUser) {
+      if (!players.some(p => p.username === matchedUser.username)) {
+        setPlayers(prev => [...prev, { username: matchedUser.username, displayName: matchedUser.displayName }]);
+      }
+    } else {
+      if (!players.some(p => p.name === val)) {
+        setPlayers(prev => [...prev, { name: val }]);
+      }
+    }
+    setPlayerInput("");
+  };
+
+  const removePlayer = (idx) => setPlayers(prev => prev.filter((_, i) => i !== idx));
+
+  const save = async () => {
+    if (!name.trim() || !startDate) return;
+    setSaving(true);
+    try {
+      const body = { name: name.trim(), startDate, endDate, numGames: parseInt(numGames) || 0, numTables: parseInt(numTables) || 0, players };
+      const url = existing ? `${API_BASE}/api/tournaments/${existing.id}` : `${API_BASE}/api/tournaments`;
+      const method = existing ? "PUT" : "POST";
+      const res = await fetch(url, { method, credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const data = await res.json();
+      if (data.ok || data.id) onSaved();
+    } catch (e) { console.error(e); }
+    setSaving(false);
+  };
+
+  const inputStyle = {
+    width: "100%", padding: "8px 10px", borderRadius: 6, border: `1px solid ${T.border}`,
+    fontSize: 13, outline: "none", fontFamily: "inherit", boxSizing: "border-box",
+  };
+
+  return (
+    <div style={{ background: T.surface, borderRadius: 12, border: `1px solid ${T.border}`, padding: 16, marginBottom: 16 }}>
+      <div style={{ fontSize: 14, fontWeight: 700, color: T.text, marginBottom: 12 }}>{existing ? "Edit Tournament" : "Add Tournament"}</div>
+
+      <div style={{ marginBottom: 10 }}>
+        <label style={{ fontSize: 11, fontWeight: 600, color: T.textSecondary, display: "block", marginBottom: 3 }}>Name *</label>
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Oslo Agricola Autumn 2026" style={inputStyle} />
+      </div>
+
+      <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+        <div style={{ flex: 1 }}>
+          <label style={{ fontSize: 11, fontWeight: 600, color: T.textSecondary, display: "block", marginBottom: 3 }}>Start date *</label>
+          <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={inputStyle} />
+        </div>
+        <div style={{ flex: 1 }}>
+          <label style={{ fontSize: 11, fontWeight: 600, color: T.textSecondary, display: "block", marginBottom: 3 }}>End date</label>
+          <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} style={inputStyle} />
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+        <div style={{ flex: 1 }}>
+          <label style={{ fontSize: 11, fontWeight: 600, color: T.textSecondary, display: "block", marginBottom: 3 }}>Games</label>
+          <input type="number" min="0" value={numGames} onChange={e => setNumGames(e.target.value)} placeholder="0" style={inputStyle} />
+        </div>
+        <div style={{ flex: 1 }}>
+          <label style={{ fontSize: 11, fontWeight: 600, color: T.textSecondary, display: "block", marginBottom: 3 }}>Tables</label>
+          <input type="number" min="0" value={numTables} onChange={e => setNumTables(e.target.value)} placeholder="0" style={inputStyle} />
+        </div>
+      </div>
+
+      {/* Players */}
+      <div style={{ marginBottom: 10 }}>
+        <label style={{ fontSize: 11, fontWeight: 600, color: T.textSecondary, display: "block", marginBottom: 3 }}>Players</label>
+        {players.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
+            {players.map((p, i) => (
+              <span key={i} onClick={() => removePlayer(i)} style={{
+                padding: "3px 8px", borderRadius: 6, fontSize: 11, cursor: "pointer",
+                background: p.username ? T.accentBg : T.surfaceAlt,
+                color: p.username ? T.accent : T.text,
+                fontWeight: p.username ? 600 : 400,
+              }}>
+                {p.displayName || p.name || p.username} ✕
+              </span>
+            ))}
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 6 }}>
+          <input value={playerInput} onChange={e => setPlayerInput(e.target.value)}
+            placeholder="Type player name or username"
+            onKeyDown={e => e.key === "Enter" && (e.preventDefault(), addPlayer())}
+            style={{ ...inputStyle, flex: 1 }} />
+          <button onClick={addPlayer} style={{
+            padding: "8px 14px", borderRadius: 6, border: "none",
+            background: T.accent, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer",
+          }}>Add</button>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+        <button onClick={onCancel} style={{
+          padding: "7px 16px", borderRadius: 6, border: `1px solid ${T.border}`,
+          background: T.surface, color: T.textSecondary, fontSize: 12, cursor: "pointer",
+        }}>Cancel</button>
+        <button onClick={save} disabled={!name.trim() || !startDate || saving} style={{
+          padding: "7px 16px", borderRadius: 6, border: "none",
+          background: !name.trim() || !startDate ? T.borderLight : T.accent,
+          color: !name.trim() || !startDate ? T.textMuted : "#fff",
+          fontSize: 12, fontWeight: 600, cursor: !name.trim() || !startDate ? "default" : "pointer",
+        }}>{saving ? "Saving..." : existing ? "Update" : "Create"}</button>
+      </div>
+    </div>
+  );
+}
+
+/* ── Main Tournaments Page ── */
+export default function TournamentsPage() {
+  const { user } = useAuth();
+  const [tournaments, setTournaments] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+  const [editingTournament, setEditingTournament] = useState(null);
+  const [selectedTournament, setSelectedTournament] = useState(null);
+  const [allUsers, setAllUsers] = useState([]);
+  const [events, setEvents] = useState([]);
+
+  const load = () => {
+    fetch(`${API_BASE}/api/tournaments`).then(r => r.json()).then(data => setTournaments(Array.isArray(data) ? data : [])).catch(() => setTournaments([]));
+    fetch(`${API_BASE}/api/events`).then(r => r.json()).then(data => setEvents(Array.isArray(data) ? data : [])).catch(() => setEvents([]));
+  };
+  useEffect(() => { load(); }, []);
+
+  // Load users for player autocomplete
+  useEffect(() => {
+    fetch(`${API_BASE}/api/users`).then(r => r.json()).then(data => setAllUsers(data || [])).catch(() => {});
+  }, []);
+
+  const handleToggle = async (id) => {
+    const res = await fetch(`${API_BASE}/api/tournaments/${id}/toggle`, { method: "PATCH", credentials: "include" });
+    const data = await res.json();
+    if (data.ok) {
+      setTournaments(prev => prev.map(t => t.id === id ? { ...t, isActive: data.isActive } : t));
+    }
+  };
+
+  const handleDelete = async (id) => {
+    await fetch(`${API_BASE}/api/tournaments/${id}`, { method: "DELETE", credentials: "include" });
+    setTournaments(prev => prev.filter(t => t.id !== id));
+  };
+
+  if (selectedTournament) {
+    return (
+      <div style={{ height: "100%", overflowX: "hidden", overflowY: "auto", overscrollBehavior: "contain", background: T.bg, fontFamily: "Inter, system-ui, sans-serif" }}>
+        <div style={{ maxWidth: 600, margin: "0 auto", padding: "32px 20px 48px" }}>
+          <TournamentDetail tournament={selectedTournament} onClose={() => setSelectedTournament(null)} />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ height: "100%", overflowX: "hidden", overflowY: "auto", overscrollBehavior: "contain", background: T.bg, fontFamily: "Inter, system-ui, sans-serif" }}>
+      <div style={{ maxWidth: 600, margin: "0 auto", padding: "32px 20px 48px" }}>
+
+        <div style={{ textAlign: "center", marginBottom: 24 }}>
+          <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: -0.5, color: T.text }}>Tournaments</div>
+          <div style={{ fontSize: 13, color: T.textMuted, marginTop: 4 }}>Registered tournaments and analytics</div>
+        </div>
+
+        {/* Add button */}
+        {user && !showForm && !editingTournament && (
+          <button onClick={() => setShowForm(true)} style={{
+            width: "100%", padding: "10px 14px", borderRadius: 10, border: `1px dashed ${T.border}`,
+            background: T.surfaceAlt, color: T.textSecondary, fontSize: 13, cursor: "pointer",
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginBottom: 16,
+          }}>
+            <span style={{ fontSize: 16 }}>+</span> Add Tournament
+          </button>
+        )}
+
+        {/* Form */}
+        {(showForm || editingTournament) && (
+          <TournamentForm
+            existing={editingTournament}
+            allUsers={allUsers}
+            onSaved={() => { setShowForm(false); setEditingTournament(null); load(); }}
+            onCancel={() => { setShowForm(false); setEditingTournament(null); }}
+          />
+        )}
+
+        {/* Tournament list */}
+        {!tournaments ? (
+          <div style={{ textAlign: "center", padding: 40, color: T.textMuted }}>Loading...</div>
+        ) : tournaments.length === 0 ? (
+          <div style={{ textAlign: "center", padding: 40, color: T.textMuted }}>
+            <div style={{ fontSize: 32, marginBottom: 8 }}>🏆</div>
+            <div>No tournaments registered yet</div>
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {tournaments.map(t => (
+              <div key={t.id} style={{
+                background: T.surface, borderRadius: 10, border: `1px solid ${T.borderLight}`,
+                padding: "12px 16px", opacity: t.isActive ? 1 : 0.6,
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{t.name}</span>
+                      {t.isActive && (
+                        <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 4, background: T.greenLight, color: T.green, fontWeight: 600 }}>ACTIVE</span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 11, color: T.textMuted, marginTop: 2 }}>
+                      {t.startDate}{t.endDate && t.endDate !== t.startDate ? ` – ${t.endDate}` : ""}
+                      {t.players?.length > 0 && ` · ${t.players.length} players`}
+                      {t.numGames > 0 && ` · ${t.numGames} games`}
+                    </div>
+                  </div>
+                  {/* Analytics button */}
+                  <button onClick={() => setSelectedTournament(t)} title="Analytics"
+                    style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: T.accent, padding: 4 }}>
+                    {"📊"}
+                  </button>
+                  {/* Edit / Toggle / Delete (logged in only) */}
+                  {user && (
+                    <>
+                      <button onClick={() => setEditingTournament(t)} title="Edit"
+                        style={{ background: "none", border: "none", fontSize: 14, cursor: "pointer", color: T.textMuted, padding: 4 }}>{"✏️"}</button>
+                      <button onClick={() => handleToggle(t.id)} title={t.isActive ? "Deactivate" : "Activate"}
+                        style={{ background: "none", border: "none", fontSize: 14, cursor: "pointer", color: t.isActive ? T.green : T.textMuted, padding: 4 }}>
+                        {t.isActive ? "✅" : "⬜"}
+                      </button>
+                      <button onClick={() => handleDelete(t.id)} title="Delete tournament"
+                        style={{ background: "none", border: "none", fontSize: 14, cursor: "pointer", color: T.textMuted, padding: 4 }}>{"🗑️"}</button>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ── Game Nights & Events (unregistered) ── */}
+        {events.length > 0 && (
+          <>
+            <div style={{ fontSize: 15, fontWeight: 700, color: T.textSecondary, marginTop: 28, marginBottom: 10 }}>
+              Game Nights & Events
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {events.map(ev => (
+                <div key={ev.name} style={{
+                  background: T.surface, borderRadius: 10, border: `1px solid ${T.borderLight}`,
+                  padding: "12px 16px",
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{ev.name}</span>
+                      <div style={{ fontSize: 11, color: T.textMuted, marginTop: 2 }}>
+                        {ev.scoreCount} score{ev.scoreCount !== 1 ? "s" : ""}
+                        {ev.latestDate && ` · last played ${ev.latestDate.slice(0, 10)}`}
+                      </div>
+                    </div>
+                    <button onClick={() => setSelectedTournament({ name: ev.name, id: null })} title="Analytics"
+                      style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: T.accent, padding: 4 }}>
+                      {"📊"}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}

@@ -28,7 +28,8 @@ function cardImgSrc(c) {
 
 // ── Card Wiki ──────────────────────────────────────────────────────────────
 
-export default function CardWiki({ allCards, initialCardId }) {
+export default function CardWiki({ allCards, listCards, norwayOnly, setNorwayOnly, initialCardId }) {
+  const browseCards = listCards || allCards;
   const [selectedCardId, setSelectedCardId] = useState(initialCardId || null);
 
   // When navigating from Explorer with a new card, update selection
@@ -45,8 +46,8 @@ export default function CardWiki({ allCards, initialCardId }) {
     fetch(`${API_BASE}/api/wiki/stats`).then(r => r.json()).then(setWikiStats).catch(() => {});
   }, [selectedCardId]);
 
-  const decks = useMemo(() => [...new Set(allCards.map(c => c.deck).filter(Boolean))].sort(), [allCards]);
-  const types = useMemo(() => [...new Set(allCards.map(c => c.type).filter(Boolean))].sort(), [allCards]);
+  const decks = useMemo(() => [...new Set(browseCards.map(c => c.deck).filter(Boolean))].sort(), [browseCards]);
+  const types = useMemo(() => [...new Set(browseCards.map(c => c.type).filter(Boolean))].sort(), [browseCards]);
 
   const cardsById = useMemo(() => {
     const m = {};
@@ -55,7 +56,7 @@ export default function CardWiki({ allCards, initialCardId }) {
   }, [allCards]);
 
   const filtered = useMemo(() => {
-    let list = allCards;
+    let list = browseCards;
     if (search) {
       const q = search.toLowerCase();
       list = list.filter(c => c.name.toLowerCase().includes(q) || c.text?.toLowerCase().includes(q));
@@ -70,7 +71,7 @@ export default function CardWiki({ allCards, initialCardId }) {
     else if (sortBy === "pwr") list = [...list].sort((a, b) => (b.pwr || 0) - (a.pwr || 0));
     else if (sortBy === "combos") list = [...list].sort((a, b) => contentCount(b.id) - contentCount(a.id));
     return list;
-  }, [allCards, search, deckFilter, typeFilter, sortBy, wikiStats]);
+  }, [browseCards, search, deckFilter, typeFilter, sortBy, wikiStats]);
 
   // Group cards by type for display
   const grouped = useMemo(() => {
@@ -130,6 +131,18 @@ export default function CardWiki({ allCards, initialCardId }) {
             }}
           />
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            {setNorwayOnly && (
+              <button onClick={() => { setNorwayOnly(!norwayOnly); setDeckFilter(""); }}
+                title="Show only cards in the Norwegian deck"
+                style={{
+                  ...selectStyle, cursor: "pointer", fontWeight: 600,
+                  borderColor: norwayOnly ? "#ef4444" : T.border,
+                  background: norwayOnly ? "#ef444418" : T.cardBg,
+                  color: norwayOnly ? "#dc2626" : T.muted,
+                }}>
+                {"\uD83C\uDDF3\uD83C\uDDF4"} {norwayOnly ? "Norwegian deck only" : "All cards"}
+              </button>
+            )}
             <select value={deckFilter} onChange={e => setDeckFilter(e.target.value)} style={selectStyle}>
               <option value="">All decks</option>
               {decks.map(d => <option key={d} value={d}>{d}</option>)}
@@ -241,8 +254,9 @@ function CardWikiPage({ cardId, allCards, cardsById, onBack, onNavigate }) {
     if (!user) { setIsFav(false); setFavNote(""); return; }
     fetch(`${API_BASE}/api/me/favourites`, { credentials: "include" })
       .then(r => r.json())
-      .then(favs => {
-        const match = (favs || []).find(f => f.cardId === cardId);
+      .then(res => {
+        const favs = res.favourites || res || [];
+        const match = favs.find(f => f.cardId === cardId);
         setIsFav(!!match);
         setFavNote(match?.notes || "");
       })
@@ -324,14 +338,6 @@ function CardWikiPage({ cardId, allCards, cardsById, onBack, onNavigate }) {
             <div style={{ color: T.muted, fontSize: "0.9rem" }}>{card.type} &middot; Deck {card.deck}</div>
           </div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
-            {user && (
-              <button onClick={toggleFav} title={isFav ? "Remove from favourites" : "Add to favourites"}
-                style={{
-                  background: "none", border: "none", fontSize: 22, cursor: "pointer",
-                  color: isFav ? "#ef4444" : "rgba(255,255,255,0.5)", transition: "all 0.15s",
-                  transform: isFav ? "scale(1.1)" : "scale(1)",
-                }}>{isFav ? "❤️" : "🩶"}</button>
-            )}
             <a href="/ontology" style={{ color: T.bg, opacity: 0.7, textDecoration: "none", fontSize: "0.85rem" }}>Ontology</a>
           </div>
         </div>
@@ -375,6 +381,22 @@ function CardWikiPage({ cardId, allCards, cardsById, onBack, onNavigate }) {
             )}
           </div>
         </div>
+
+        {/* Favourite toggle */}
+        {user && (
+          <button onClick={toggleFav} disabled={favLoading}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 6,
+              padding: "8px 16px", borderRadius: 8, marginBottom: 16,
+              border: `1px solid ${isFav ? "#fca5a5" : T.border}`,
+              background: isFav ? "#fef2f2" : T.bg,
+              color: isFav ? "#dc2626" : T.muted,
+              fontSize: 13, fontWeight: 500, cursor: "pointer", transition: "all 0.15s",
+            }}>
+            <span style={{ fontSize: 16 }}>{isFav ? "❤️" : "🩶"}</span>
+            {isFav ? "Saved to favourites" : "Add to favourites"}
+          </button>
+        )}
 
         {/* Favourite note */}
         {user && isFav && (
@@ -519,6 +541,34 @@ function StatBox({ label, value }) {
 
 // ── Combos Tab ──────────────────────────────────────────────────────────────
 
+function SaveComboBtn({ cardId, partnerIds, card }) {
+  const { user } = useAuth();
+  const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  if (!user) return null;
+  const allIds = [cardId, ...partnerIds].sort();
+  const handleSave = async () => {
+    if (saving || saved) return;
+    setSaving(true);
+    try {
+      await fetch(`${API_BASE}/api/me/combos`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cardIds: allIds, notes: "" }),
+      });
+      setSaved(true);
+    } catch (e) { console.error(e); }
+    setSaving(false);
+  };
+  return (
+    <button onClick={handleSave} title={saved ? "Saved!" : "Save combo to profile"}
+      style={{
+        background: "none", border: "none", fontSize: 14, cursor: saved ? "default" : "pointer",
+        color: saved ? T.green : T.muted, padding: "0 2px", transition: "all 0.15s", flexShrink: 0,
+      }}>{saved ? "✓" : "💾"}</button>
+  );
+}
+
 function CombosTab({ card, allCombos, cardsById, onNavigate, showAdd, setShowAdd, allCards, onRefresh }) {
   const ontologyCombos = allCombos.filter(c => c.source === "ontology");
   const communityCombos = allCombos.filter(c => c.source !== "ontology");
@@ -529,23 +579,26 @@ function CombosTab({ card, allCombos, cardsById, onNavigate, showAdd, setShowAdd
       : (combo.cardIds || []).filter(id => id !== card.id);
     return (
       <li key={i} style={{ padding: "6px 0", borderBottom: `1px solid ${T.border}` }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-          {partnerIds.map(pid => {
-            const partner = cardsById[pid];
-            if (!partner) return <span key={pid} style={{ fontSize: "0.85rem", color: T.muted }}>{pid}</span>;
-            return (
-              <a key={pid} onClick={() => onNavigate(pid)}
-                style={{ color: T.link, cursor: "pointer", fontWeight: 500, fontSize: "0.9rem" }}>
-                {partner.name}
-              </a>
-            );
-          })}
-          {combo.source === "ontology" && combo.reasonLabel && (
-            <span style={{ fontSize: "0.78rem", color: T.muted }}>{combo.reasonLabel}</span>
-          )}
-          {combo.submittedBy && (
-            <span style={{ fontSize: "0.78rem", color: T.muted }}>by {combo.submittedBy}</span>
-          )}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <div style={{ flex: 1, display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+            {partnerIds.map(pid => {
+              const partner = cardsById[pid];
+              if (!partner) return <span key={pid} style={{ fontSize: "0.85rem", color: T.muted }}>{pid}</span>;
+              return (
+                <a key={pid} onClick={() => onNavigate(pid)}
+                  style={{ color: T.link, cursor: "pointer", fontWeight: 500, fontSize: "0.9rem" }}>
+                  {partner.name}
+                </a>
+              );
+            })}
+            {combo.source === "ontology" && combo.reasonLabel && (
+              <span style={{ fontSize: "0.78rem", color: T.muted }}>{combo.reasonLabel}</span>
+            )}
+            {combo.submittedBy && (
+              <span style={{ fontSize: "0.78rem", color: T.muted }}>by {combo.submittedBy}</span>
+            )}
+          </div>
+          <SaveComboBtn cardId={card.id} partnerIds={partnerIds} card={card} />
         </div>
         {combo.comment && (
           <div style={{ fontSize: "0.82rem", color: T.muted, marginTop: 2, fontStyle: "italic", paddingLeft: 2 }}>

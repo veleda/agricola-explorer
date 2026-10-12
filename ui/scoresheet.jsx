@@ -64,7 +64,7 @@ function defaultValues() {
   return {
     fields: 0, pastures: 0, grain: 0, vegetables: 0,
     sheep: 0, wildBoar: 0, cattle: 0,
-    unusedSpaces: 13, familyMembers: 2,
+    unusedSpaces: 0, familyMembers: 2,
   };
 }
 
@@ -889,7 +889,9 @@ function StepperBtn({ direction, onClick }) {
 export default function ScoreSheet({ allCards = [] }) {
   const isMobile = useIsMobile();
   const [name, setName] = useState("");
-  const [tournament, setTournament] = useState("");
+  const [tournamentId, setTournamentId] = useState("");
+  const [tournamentName, setTournamentName] = useState("");
+  const [activeTournaments, setActiveTournaments] = useState([]);
   const [tableNumber, setTableNumber] = useState("");
   const [gameNumber, setGameNumber] = useState("");
   const [startingPosition, setStartingPosition] = useState("");
@@ -899,6 +901,14 @@ export default function ScoreSheet({ allCards = [] }) {
   const [saveMsg, setSaveMsg] = useState(null); // {type: "ok"|"err", text}
   const [showBrowser, setShowBrowser] = useState(false);
   const [showAnalytics, setShowAnalytics] = useState(false);
+
+  // Load active tournaments for dropdown
+  useEffect(() => {
+    fetch(`${API_BASE}/api/tournaments`)
+      .then(r => r.json())
+      .then(data => setActiveTournaments((Array.isArray(data) ? data : []).filter(t => t.isActive)))
+      .catch(() => {});
+  }, []);
 
   // ── Card log state ──────────────────────────────────────────────────────
   const [showCardLog, setShowCardLog] = useState(false);
@@ -1069,7 +1079,8 @@ export default function ScoreSheet({ allCards = [] }) {
   const handleReset = useCallback(() => {
     setValues(defaultValues());
     setName("");
-    setTournament("");
+    setTournamentId("");
+    setTournamentName("");
     setTableNumber("");
     setGameNumber("");
     setStartingPosition("");
@@ -1097,7 +1108,8 @@ export default function ScoreSheet({ allCards = [] }) {
     try {
       const payload = {
         name: name.trim(),
-        tournament: tournament.trim() || null,
+        tournament: tournamentName || null,
+        tournamentId: (tournamentId && tournamentId !== "__other__") ? tournamentId : null,
         tableNumber: tableNumber.trim() || null,
         gameNumber: gameNumber.trim() || null,
         startingPosition: startingPosition.trim() || null,
@@ -1117,7 +1129,7 @@ export default function ScoreSheet({ allCards = [] }) {
     } finally {
       setSaving(false);
     }
-  }, [name, tournament, tableNumber, gameNumber, startingPosition, values, points, total, taggedCards]);
+  }, [name, tournamentId, tournamentName, tableNumber, gameNumber, startingPosition, values, points, total, taggedCards]);
 
   // Group categories
   const grouped = useMemo(() => {
@@ -1150,6 +1162,21 @@ export default function ScoreSheet({ allCards = [] }) {
           <div style={{ fontSize: 13, color: T.textMuted, marginTop: 4 }}>
             Enter your counts — points are calculated automatically
           </div>
+          {/* ── Browse Scores button ─────────────────────────── */}
+          <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 12 }}>
+            <button onClick={() => setShowBrowser(b => !b)}
+              style={{
+                padding: "7px 18px", borderRadius: 8,
+                border: `1px solid ${T.border}`, background: showBrowser ? T.accentBg : T.surface,
+                color: showBrowser ? T.accent : T.textSecondary,
+                fontSize: 12, fontWeight: 500, cursor: "pointer", transition: "all 0.15s",
+              }}
+              onMouseEnter={e => { if (!showBrowser) e.target.style.background = T.surfaceAlt; }}
+              onMouseLeave={e => { if (!showBrowser) e.target.style.background = T.surface; }}
+            >
+              Browse Scores
+            </button>
+          </div>
         </div>
 
         {/* ── Name / Tournament / Table & Game ────────────────────────── */}
@@ -1177,24 +1204,54 @@ export default function ScoreSheet({ allCards = [] }) {
             />
           </div>
 
-          {/* Tournament */}
+          {/* Tournament / Game night */}
           <div style={{ marginBottom: 12 }}>
             <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: T.textSecondary, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>
-              Tournament <span style={{ fontSize: 10, fontWeight: 400, color: T.textMuted }}>(optional)</span>
+              Tournament / Event <span style={{ fontSize: 10, fontWeight: 400, color: T.textMuted }}>(optional)</span>
             </label>
-            <input
-              type="text" value={tournament} onChange={e => setTournament(e.target.value)}
-              placeholder="e.g. Friday Night Agricola"
+            <select
+              value={tournamentId}
+              onChange={e => {
+                const id = e.target.value;
+                setTournamentId(id);
+                if (id === "__other__") {
+                  setTournamentName("");
+                } else {
+                  const t = activeTournaments.find(t => t.id === id);
+                  setTournamentName(t ? t.name : "");
+                }
+              }}
               style={{
                 width: "100%", padding: "8px 12px", borderRadius: 8,
                 border: `1.5px solid ${T.border}`,
-                background: T.bg, fontSize: 14, color: T.text,
+                background: T.bg, fontSize: 14, color: tournamentId ? T.text : T.textMuted,
                 outline: "none", transition: "border-color 0.15s",
-                boxSizing: "border-box",
+                boxSizing: "border-box", cursor: "pointer",
               }}
               onFocus={e => e.target.style.borderColor = T.accent}
               onBlur={e => e.target.style.borderColor = T.border}
-            />
+            >
+              <option value="">None</option>
+              {activeTournaments.map(t => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+              <option value="__other__">Other (game night, casual, ...)</option>
+            </select>
+            {tournamentId === "__other__" && (
+              <input
+                type="text" value={tournamentName} onChange={e => setTournamentName(e.target.value)}
+                placeholder="e.g. Friday game night"
+                style={{
+                  width: "100%", padding: "8px 12px", borderRadius: 8,
+                  border: `1.5px solid ${T.border}`, background: T.bg,
+                  fontSize: 14, color: T.text, outline: "none",
+                  boxSizing: "border-box", marginTop: 6,
+                  transition: "border-color 0.15s",
+                }}
+                onFocus={e => e.target.style.borderColor = T.accent}
+                onBlur={e => e.target.style.borderColor = T.border}
+              />
+            )}
           </div>
 
           {/* Table number + Game number + Starting position — side by side */}
@@ -1428,7 +1485,7 @@ export default function ScoreSheet({ allCards = [] }) {
             {name && (
               <div style={{ fontSize: 11, color: T.textMuted, marginTop: 2 }}>
                 {name}
-                {tournament ? ` · ${tournament}` : ""}
+                {tournamentName ? ` · ${tournamentName}` : ""}
                 {tableNumber ? ` · T${tableNumber}` : ""}
                 {gameNumber ? ` · G${gameNumber}` : ""}
                 {startingPosition ? ` · P${startingPosition}` : ""}
@@ -1786,30 +1843,6 @@ export default function ScoreSheet({ allCards = [] }) {
             onMouseLeave={e => { e.target.style.background = T.surface; }}
           >
             Reset
-          </button>
-          <button onClick={() => setShowBrowser(b => !b)}
-            style={{
-              padding: "9px 24px", borderRadius: 8,
-              border: `1px solid ${T.border}`, background: showBrowser ? T.accentBg : T.surface,
-              color: showBrowser ? T.accent : T.textSecondary,
-              fontSize: 13, fontWeight: 500, cursor: "pointer", transition: "all 0.15s",
-            }}
-            onMouseEnter={e => { if (!showBrowser) e.target.style.background = T.surfaceAlt; }}
-            onMouseLeave={e => { if (!showBrowser) e.target.style.background = T.surface; }}
-          >
-            Browse Scores
-          </button>
-          <button onClick={() => setShowAnalytics(true)}
-            style={{
-              padding: "9px 24px", borderRadius: 8,
-              border: `1px solid ${T.border}`, background: T.surface,
-              color: T.textSecondary,
-              fontSize: 13, fontWeight: 500, cursor: "pointer", transition: "all 0.15s",
-            }}
-            onMouseEnter={e => { e.target.style.background = T.surfaceAlt; }}
-            onMouseLeave={e => { e.target.style.background = T.surface; }}
-          >
-            📊 Analytics
           </button>
         </div>
 

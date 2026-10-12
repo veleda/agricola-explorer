@@ -6,6 +6,7 @@ import ScoreSheet from "./scoresheet.jsx";
 import CardWiki from "./wiki.jsx";
 import LiveGame from "./livegame.jsx";
 import ProfilePage from "./profile.jsx";
+import TournamentsPage from "./tournaments.jsx";
 import { AuthProvider, useAuth, SignInModal } from "./auth.jsx";
 
 // ── API helpers ─────────────────────────────────────────────────────────────
@@ -700,7 +701,7 @@ function FavButton({ cardId, themeE }) {
     if (!user) { setIsFav(false); return; }
     fetch(`${API_BASE}/api/me/favourites`, { credentials: "include" })
       .then(r => r.json())
-      .then(favs => setIsFav((favs || []).some(f => f.cardId === cardId)))
+      .then(res => setIsFav((res.favourites || []).some(f => f.cardId === cardId)))
       .catch(() => {});
   }, [user, cardId]);
 
@@ -1044,7 +1045,7 @@ export default function App() {
   // Auto-collapse sidebar when entering drafter/hands, expand when returning to explorer
   const setAppModeWithSidebar = useCallback((mode, opts) => {
     setAppMode(mode);
-    setSidebarCollapsed(mode === "drafter" || mode === "hands" || mode === "score" || mode === "wiki" || mode === "live");
+    setSidebarCollapsed(mode === "drafter" || mode === "hands" || mode === "score" || mode === "wiki" || mode === "live" || mode === "tournament");
     if (opts?.draftType) setHandsDraftType(opts.draftType);
     if (opts?.wikiCardId) setWikiCardId(opts.wikiCardId);
     else if (mode === "wiki" && !opts?.wikiCardId) setWikiCardId(null);
@@ -1123,7 +1124,7 @@ export default function App() {
 
   // Sync body background to prevent dark flash on mobile overscroll
   useEffect(() => {
-    const isLightMode = appMode === "drafter" || appMode === "hands" || appMode === "score" || appMode === "wiki" || appMode === "live" || appMode === "profile";
+    const isLightMode = appMode === "drafter" || appMode === "hands" || appMode === "score" || appMode === "wiki" || appMode === "live" || appMode === "profile" || appMode === "tournament";
     document.body.style.background = isLightMode ? "#faf9f7" : E.bg;
   }, [appMode, E.bg]);
 
@@ -1174,8 +1175,8 @@ export default function App() {
   const [sparqlEdited, setSparqlEdited] = useState(false);
   const [queryResult, setQueryResult] = useState(null);
   const [isRunning, setIsRunning] = useState(false);
-  const [sortCol, setSortCol] = useState(null);      // "winRatio" | "playRatio" | "pwr" | null
-  const [sortDir, setSortDir] = useState("desc");     // "asc" | "desc"
+  const [sortCol, setSortCol] = useState("name");    // "name" | "winRatio" | "playRatio" | "pwr" | "adp" | null
+  const [sortDir, setSortDir] = useState("asc");      // "asc" | "desc"
 
   // Callbacks for clickable tags in Card Inspector
   const handleFilterGain = useCallback((gain) => {
@@ -1313,7 +1314,7 @@ export default function App() {
       setSortDir(d => d === "desc" ? "asc" : "desc");
     } else {
       setSortCol(col);
-      setSortDir("desc");
+      setSortDir(col === "name" ? "asc" : "desc");
     }
   }, [sortCol]);
 
@@ -1321,6 +1322,9 @@ export default function App() {
   const sorted = useMemo(() => {
     if (!sortCol) return filtered;
     const dir = sortDir === "desc" ? -1 : 1;
+    if (sortCol === "name") {
+      return [...filtered].sort((a, b) => (a.name || "").localeCompare(b.name || "", "nb") * dir);
+    }
     return [...filtered].sort((a, b) => ((a[sortCol] || 0) - (b[sortCol] || 0)) * dir);
   }, [filtered, sortCol, sortDir]);
 
@@ -1452,10 +1456,11 @@ export default function App() {
       { mode: "score", emoji: "\uD83D\uDCCB", label: "Score" },
       { mode: "wiki", emoji: "\uD83D\uDCD6", label: "Wiki" },
       { mode: "live", emoji: "\uD83C\uDFAF", label: "Live" },
+      { mode: "tournament", emoji: "\uD83C\uDFC6", label: "Tourney" },
       ...(user ? [{ mode: "profile", emoji: "\uD83D\uDC64", label: "Me" }] : []),
     ];
     const mobileModeSwitcher = (
-      <div style={{ display: "flex", gap: 3, background: E.surface, borderRadius: 8, padding: 2, border: `1px solid ${E.border}` }}>
+      <div style={{ display: "flex", gap: 3, background: E.surface, borderRadius: 8, padding: 2, border: `1px solid ${E.border}`, overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
         {mobileModes.map(({ mode, emoji, label }) => {
           const isActive = appMode === mode;
           return (
@@ -1484,6 +1489,7 @@ export default function App() {
         { mode: "score", emoji: "\uD83D\uDCCB", title: "Score Sheet", desc: "Calculate your game score" },
         { mode: "wiki", emoji: "\uD83D\uDCD6", title: "Card Wiki", desc: "Combos, tips & anti-combos" },
         { mode: "live", emoji: "\uD83C\uDFAF", title: "Live Draft", desc: "Draft with friends at the table" },
+        { mode: "tournament", emoji: "\uD83C\uDFC6", title: "Tournaments", desc: "Register & view tournaments" },
       ];
       return (
         <div style={{
@@ -1504,7 +1510,7 @@ export default function App() {
           }} />
 
           {/* Content */}
-          <div style={{ position: "relative", zIndex: 2, flex: 1, display: "flex", flexDirection: "column", justifyContent: "flex-end", padding: "24px 20px 20px" }}>
+          <div style={{ position: "relative", zIndex: 2, flex: 1, display: "flex", flexDirection: "column", justifyContent: "flex-end", padding: "24px 20px 20px", overflowY: "auto", overscrollBehavior: "contain" }}>
             {/* Logo / title */}
             <div style={{ textAlign: "center", marginBottom: 28 }}>
               <img src="/agricola-icon-no.png" alt="Agricola" style={{
@@ -1579,7 +1585,7 @@ export default function App() {
       );
     }
 
-    if (appMode === "drafter" || appMode === "hands" || appMode === "score" || appMode === "wiki" || appMode === "live" || appMode === "profile") {
+    if (appMode === "drafter" || appMode === "hands" || appMode === "score" || appMode === "wiki" || appMode === "live" || appMode === "profile" || appMode === "tournament") {
       return (
         <div style={{ display: "flex", flexDirection: "column", height: "100dvh", width: "100%", overflow: "hidden", background: E.bg, color: E.textSecondary, fontFamily: "Inter, system-ui, sans-serif" }}>
           {/* Mobile drafter/hands/score/wiki header */}
@@ -1603,11 +1609,13 @@ export default function App() {
               : appMode === "hands"
               ? <CommunityHands allCards={allCards} initialDraftType={handsDraftType} />
               : appMode === "wiki"
-              ? <CardWiki allCards={allCards} initialCardId={wikiCardId} />
+              ? <CardWiki allCards={allCards} listCards={activeCards} norwayOnly={norwayOnly} setNorwayOnly={setNorwayOnly} initialCardId={wikiCardId} />
               : appMode === "live"
               ? <LiveGame allCards={allCards} />
               : appMode === "profile"
-              ? <ProfilePage allCards={allCards} />
+              ? <ProfilePage allCards={allCards} onViewInWiki={(id) => setAppModeWithSidebar("wiki", { wikiCardId: id })} />
+              : appMode === "tournament"
+              ? <TournamentsPage />
               : <ScoreSheet allCards={activeCards} />
             }
           </div>
@@ -1699,7 +1707,7 @@ export default function App() {
                 </div>
                 {/* Sort chips (visible in both modes) */}
                 <div style={{ display: "flex", gap: 4, marginLeft: "auto", fontSize: 10 }}>
-                  {[["pwr", "PWR"], ["winRatio", "Win"], ["adp", "ADP"]].map(([key, label]) => (
+                  {[["name", "A–Å"], ["pwr", "PWR"], ["winRatio", "Win"], ["adp", "ADP"]].map(([key, label]) => (
                     <button key={key} onClick={() => toggleSort(key)}
                       style={{
                         padding: "3px 8px", borderRadius: 99, border: `1px solid ${sortCol === key ? E.blue : E.border}`,
@@ -1721,7 +1729,12 @@ export default function App() {
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, color: E.text }}>
                   <thead>
                     <tr style={{ borderBottom: `1px solid ${E.border}`, color: E.textDim, textAlign: "left" }}>
-                      <th style={{ padding: "6px 4px" }}>Card</th>
+                      <th onClick={() => toggleSort("name")} style={{ padding: "6px 4px", cursor: "pointer", userSelect: "none" }}>
+                        <span style={{ color: sortCol === "name" ? E.blue : "inherit" }}>Card</span>
+                        <span style={{ marginLeft: 2, fontSize: 8, opacity: sortCol === "name" ? 1 : 0.3 }}>
+                          {sortCol === "name" ? (sortDir === "asc" ? "\u25B2" : "\u25BC") : "\u25B2"}
+                        </span>
+                      </th>
                       <th style={{ padding: "6px 4px" }}>Dk</th>
                       {[["winRatio", "Win"], ["playRatio", "Play"], ["pwr", "PWR"], ["adp", "ADP"]].map(([key, label]) => (
                         <th key={key} onClick={() => toggleSort(key)}
@@ -1807,6 +1820,7 @@ export default function App() {
             { mode: "score", emoji: "\uD83D\uDCCB", label: "Score" },
             { mode: "wiki", emoji: "\uD83D\uDCD6", label: "Wiki" },
             { mode: "live", emoji: "\uD83C\uDFAF", label: "Live" },
+            { mode: "tournament", emoji: "\uD83C\uDFC6", label: "Tourney" },
           ].map(({ mode, emoji, label }) => {
             const isActive = appMode === mode;
             return (
@@ -1925,7 +1939,7 @@ export default function App() {
                 color: appMode === "profile" ? E.accent : E.textMuted,
                 fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all 0.15s",
               }}>
-              \uD83D\uDC64 {user.username}
+              {"\uD83D\uDC64"} {user.username}
             </button>
           ) : (
             <button onClick={() => setShowSignIn(true)}
@@ -1999,7 +2013,7 @@ export default function App() {
         </div>
       ) : appMode === "wiki" ? (
         <div style={{ flex: 1, overflow: "hidden" }}>
-          <CardWiki allCards={allCards} initialCardId={wikiCardId} />
+          <CardWiki allCards={allCards} listCards={activeCards} norwayOnly={norwayOnly} setNorwayOnly={setNorwayOnly} initialCardId={wikiCardId} />
         </div>
       ) : appMode === "live" ? (
         <div style={{ flex: 1, overflow: "hidden" }}>
@@ -2007,7 +2021,11 @@ export default function App() {
         </div>
       ) : appMode === "profile" && user ? (
         <div style={{ flex: 1, overflow: "hidden" }}>
-          <ProfilePage />
+          <ProfilePage allCards={allCards} onViewInWiki={(id) => setAppModeWithSidebar("wiki", { wikiCardId: id })} />
+        </div>
+      ) : appMode === "tournament" ? (
+        <div style={{ flex: 1, overflow: "hidden" }}>
+          <TournamentsPage />
         </div>
       ) : (
       <>
@@ -2124,7 +2142,12 @@ export default function App() {
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, color: E.text }}>
                   <thead>
                     <tr style={{ borderBottom: `1px solid ${E.border}`, color: E.textDim, textAlign: "left" }}>
-                      <th style={{ padding: "8px 6px" }}>Card</th>
+                      <th onClick={() => toggleSort("name")} style={{ padding: "8px 6px", cursor: "pointer", userSelect: "none" }}>
+                        <span style={{ color: sortCol === "name" ? E.blue : "inherit" }}>Card</span>
+                        <span style={{ marginLeft: 4, fontSize: 10, opacity: sortCol === "name" ? 1 : 0.3 }}>
+                          {sortCol === "name" ? (sortDir === "asc" ? "\u25B2" : "\u25BC") : "\u25B2"}
+                        </span>
+                      </th>
                       <th style={{ padding: "8px 6px" }}>Deck</th>
                       <th style={{ padding: "8px 6px" }}>Type</th>
                       {[["winRatio", "Win %"], ["playRatio", "Play %"], ["pwr", "PWR"], ["adp", "ADP"]].map(([key, label]) => (

@@ -1,4 +1,4 @@
-const CACHE_NAME = "agricola-v1";
+const CACHE_NAME = "agricola-v2";
 const IMG_CACHE  = "agricola-card-images";
 const PRECACHE = ["/", "/icon-192.png", "/icon-512.png"];
 
@@ -41,18 +41,14 @@ self.addEventListener("fetch", (e) => {
   // Skip other API calls (data is handled by localStorage fallback in the app)
   if (url.pathname.startsWith("/api")) return;
 
-  // App shell: stale-while-revalidate
+  // App shell: network-first (avoids stale HTML referencing old JS bundles)
   e.respondWith(
-    caches.match(e.request).then((cached) => {
-      const fetchPromise = fetch(e.request).then((res) => {
-        if (res.ok) {
-          const clone = res.clone();
-          caches.open(CACHE_NAME).then((c) => c.put(e.request, clone));
-        }
-        return res;
-      }).catch(() => cached);
-
-      return cached || fetchPromise;
-    })
+    fetch(e.request).then((res) => {
+      if (res.ok) {
+        const clone = res.clone();
+        caches.open(CACHE_NAME).then((c) => c.put(e.request, clone));
+      }
+      return res;
+    }).catch(() => caches.match(e.request))
   );
 });

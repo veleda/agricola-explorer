@@ -37,7 +37,265 @@ function SectionCard({ title, children, icon }) {
   );
 }
 
-export default function ProfilePage({ allCards = [] }) {
+/* ── Favourite card row with inline note editing ── */
+function FavCardRow({ fav, card, onUpdate, onRemove, onNavigate }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(fav.notes || "");
+
+  const save = () => { onUpdate(draft.trim()); setEditing(false); };
+
+  return (
+    <div style={{
+      background: T.surface, borderRadius: 10, border: `1px solid ${T.borderLight}`,
+      padding: "10px 14px",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ color: T.red, fontSize: 16, cursor: "pointer" }} onClick={onRemove} title="Remove">{"❤️"}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: onNavigate ? T.accent : T.text, cursor: onNavigate ? "pointer" : "default", textDecoration: onNavigate ? "none" : "none" }}
+            onClick={() => onNavigate && onNavigate(fav.cardId)}>
+            {card?.name || fav.cardId}
+          </div>
+          {card && (
+            <div style={{ fontSize: 10, color: T.textMuted, marginTop: 1 }}>
+              {card.type} · {card.deck}
+            </div>
+          )}
+        </div>
+        <button onClick={() => { setDraft(fav.notes || ""); setEditing(!editing); }}
+          style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: T.textMuted, padding: 4 }}
+          title={fav.notes ? "Edit note" : "Add note"}>
+          {fav.notes ? "✏️" : "📝"}
+        </button>
+      </div>
+      {editing ? (
+        <div style={{ marginTop: 8, display: "flex", gap: 6 }}>
+          <input value={draft} onChange={e => setDraft(e.target.value)}
+            placeholder="Add a note about this card…"
+            onKeyDown={e => e.key === "Enter" && save()}
+            style={{
+              flex: 1, padding: "6px 10px", borderRadius: 6, border: `1px solid ${T.border}`,
+              fontSize: 12, outline: "none", fontFamily: "inherit",
+            }} autoFocus />
+          <button onClick={save} style={{
+            padding: "6px 12px", borderRadius: 6, border: "none",
+            background: T.accent, color: "#fff", fontSize: 11, fontWeight: 600, cursor: "pointer",
+          }}>Save</button>
+        </div>
+      ) : fav.notes ? (
+        <div style={{ fontSize: 11, color: T.textSecondary, marginTop: 6, paddingLeft: 28, fontStyle: "italic" }}>
+          {fav.notes}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/* ── Combo row with inline note editing ── */
+function ComboRow({ combo, cardById, onUpdateNotes, onRemove, onNavigate }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(combo.notes || "");
+
+  const save = () => { onUpdateNotes(draft.trim()); setEditing(false); };
+
+  return (
+    <div style={{
+      background: T.surface, borderRadius: 10, border: `1px solid ${T.borderLight}`,
+      padding: "10px 14px",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ color: T.accent, fontSize: 14 }}>🔗</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>
+            {(combo.cardIds || []).map((id, i) => (
+              <span key={id}>
+                {i > 0 && " + "}
+                <span style={{ color: onNavigate ? T.accent : T.text, cursor: onNavigate ? "pointer" : "default" }}
+                  onClick={() => onNavigate && onNavigate(id)}>
+                  {cardById[id]?.name || id}
+                </span>
+              </span>
+            ))}
+          </div>
+          <div style={{ fontSize: 10, color: T.textMuted, marginTop: 1 }}>
+            {combo.cardIds.length} cards · {new Date(combo.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+          </div>
+        </div>
+        <button onClick={() => { setDraft(combo.notes || ""); setEditing(!editing); }}
+          style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: T.textMuted, padding: 4 }}
+          title={combo.notes ? "Edit note" : "Add note"}>
+          {combo.notes ? "✏️" : "📝"}
+        </button>
+        <button onClick={onRemove}
+          style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: T.textMuted, padding: 4 }}
+          title="Remove combo">🗑️</button>
+      </div>
+      {editing ? (
+        <div style={{ marginTop: 8, display: "flex", gap: 6 }}>
+          <input value={draft} onChange={e => setDraft(e.target.value)}
+            placeholder="Add a note about this combo…"
+            onKeyDown={e => e.key === "Enter" && save()}
+            style={{
+              flex: 1, padding: "6px 10px", borderRadius: 6, border: `1px solid ${T.border}`,
+              fontSize: 12, outline: "none", fontFamily: "inherit",
+            }} autoFocus />
+          <button onClick={save} style={{
+            padding: "6px 12px", borderRadius: 6, border: "none",
+            background: T.accent, color: "#fff", fontSize: 11, fontWeight: 600, cursor: "pointer",
+          }}>Save</button>
+        </div>
+      ) : combo.notes ? (
+        <div style={{ fontSize: 11, color: T.textSecondary, marginTop: 6, paddingLeft: 26, fontStyle: "italic" }}>
+          {combo.notes}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/* ── Create-combo widget: pick 2+ cards, add notes, save ── */
+function CreateComboWidget({ allCards, onCreated }) {
+  const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState([]);
+  const [notes, setNotes] = useState("");
+  const [search, setSearch] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const toggle = (id) => {
+    setSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+
+  const filtered = useMemo(() => {
+    if (!search.trim()) return allCards.slice(0, 40);
+    const q = search.toLowerCase();
+    return allCards.filter(c => c.name.toLowerCase().includes(q) || c.id.toLowerCase().includes(q)).slice(0, 40);
+  }, [search, allCards]);
+
+  const save = async () => {
+    if (selected.length < 2) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/me/combos`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cardIds: selected, notes: notes.trim() }),
+      });
+      const data = await res.json();
+      if (data.id) {
+        onCreated({ id: data.id, cardIds: selected, notes: notes.trim(), createdAt: new Date().toISOString() });
+        setSelected([]); setNotes(""); setSearch(""); setOpen(false);
+      }
+    } catch (e) { console.error(e); }
+    setSaving(false);
+  };
+
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)} style={{
+        width: "100%", padding: "10px 14px", borderRadius: 10, border: `1px dashed ${T.border}`,
+        background: T.surfaceAlt, color: T.textSecondary, fontSize: 13, cursor: "pointer",
+        display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+      }}>
+        <span style={{ fontSize: 16 }}>+</span> Create custom combo
+      </button>
+    );
+  }
+
+  return (
+    <div style={{
+      background: T.surface, borderRadius: 12, border: `1px solid ${T.border}`,
+      padding: 14, marginBottom: 4,
+    }}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: T.text, marginBottom: 10 }}>
+        Create Combo
+      </div>
+
+      {/* Selected cards */}
+      {selected.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
+          {selected.map(id => {
+            const c = allCards.find(x => x.id === id);
+            return (
+              <span key={id} onClick={() => toggle(id)} style={{
+                padding: "3px 8px", borderRadius: 6, background: T.accentBg, color: T.accent,
+                fontSize: 11, fontWeight: 600, cursor: "pointer",
+              }}>
+                {c?.name || id} ✕
+              </span>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Search */}
+      <input value={search} onChange={e => setSearch(e.target.value)}
+        placeholder="Search cards…"
+        style={{
+          width: "100%", padding: "7px 10px", borderRadius: 6, border: `1px solid ${T.border}`,
+          fontSize: 12, outline: "none", fontFamily: "inherit", marginBottom: 6, boxSizing: "border-box",
+        }} />
+
+      {/* Card list */}
+      <div style={{
+        maxHeight: 180, overflowY: "auto", border: `1px solid ${T.borderLight}`,
+        borderRadius: 6, marginBottom: 8,
+      }}>
+        {filtered.map(c => {
+          const sel = selected.includes(c.id);
+          return (
+            <div key={c.id} onClick={() => toggle(c.id)} style={{
+              padding: "6px 10px", cursor: "pointer", fontSize: 12,
+              display: "flex", alignItems: "center", gap: 6,
+              background: sel ? T.accentBg : "transparent",
+              borderBottom: `1px solid ${T.borderLight}`,
+            }}>
+              <span style={{ width: 16, textAlign: "center", fontSize: 11 }}>
+                {sel ? "✓" : ""}
+              </span>
+              <span style={{ fontWeight: sel ? 600 : 400, color: sel ? T.accent : T.text }}>
+                {c.name}
+              </span>
+              <span style={{ fontSize: 10, color: T.textMuted, marginLeft: "auto" }}>
+                {c.type}
+              </span>
+            </div>
+          );
+        })}
+        {filtered.length === 0 && (
+          <div style={{ padding: 12, textAlign: "center", fontSize: 11, color: T.textMuted }}>No cards found</div>
+        )}
+      </div>
+
+      {/* Notes */}
+      <input value={notes} onChange={e => setNotes(e.target.value)}
+        placeholder="Notes (optional)…"
+        style={{
+          width: "100%", padding: "7px 10px", borderRadius: 6, border: `1px solid ${T.border}`,
+          fontSize: 12, outline: "none", fontFamily: "inherit", marginBottom: 8, boxSizing: "border-box",
+        }} />
+
+      {/* Actions */}
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <button onClick={() => { setOpen(false); setSelected([]); setNotes(""); setSearch(""); }}
+          style={{
+            padding: "6px 14px", borderRadius: 6, border: `1px solid ${T.border}`,
+            background: T.surface, color: T.textSecondary, fontSize: 11, cursor: "pointer",
+          }}>Cancel</button>
+        <button onClick={save} disabled={selected.length < 2 || saving}
+          style={{
+            padding: "6px 14px", borderRadius: 6, border: "none",
+            background: selected.length < 2 ? T.borderLight : T.accent,
+            color: selected.length < 2 ? T.textMuted : "#fff",
+            fontSize: 11, fontWeight: 600, cursor: selected.length < 2 ? "default" : "pointer",
+          }}>
+          {saving ? "Saving…" : `Save combo (${selected.length} cards)`}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export default function ProfilePage({ allCards = [], onViewInWiki }) {
   const { user, setUser } = useAuth();
   const [tab, setTab] = useState("overview"); // overview | scores | drafts | challenges | favourites
   const [stats, setStats] = useState(null);
@@ -45,6 +303,7 @@ export default function ProfilePage({ allCards = [] }) {
   const [drafts, setDrafts] = useState(null);
   const [challenges, setChallenges] = useState(null);
   const [favourites, setFavourites] = useState(null);
+  const [combos, setCombos] = useState(null);
   const [loading, setLoading] = useState(true);
 
   // Load stats on mount
@@ -79,7 +338,11 @@ export default function ProfilePage({ allCards = [] }) {
       fetch(`${API_BASE}/api/me/favourites`, { credentials: "include" })
         .then(r => r.json()).then(d => setFavourites(d.favourites || []));
     }
-  }, [tab, user, scores, drafts, challenges, favourites]);
+    if (tab === "combos" && !combos) {
+      fetch(`${API_BASE}/api/me/combos`, { credentials: "include" })
+        .then(r => r.json()).then(d => setCombos(d || []));
+    }
+  }, [tab, user, scores, drafts, challenges, favourites, combos]);
 
   const handleLogout = async () => {
     await fetch(`${API_BASE}/api/auth/logout`, { method: "POST", credentials: "include" });
@@ -100,6 +363,7 @@ export default function ProfilePage({ allCards = [] }) {
     { id: "drafts", label: "Drafts", icon: "🃏", count: stats?.totalDrafts },
     { id: "challenges", label: "Challenges", icon: "⚔️", count: stats?.totalChallenges },
     { id: "favourites", label: "Cards", icon: "⭐", count: stats?.totalFavourites },
+    { id: "combos", label: "Combos", icon: "🔗", count: stats?.totalCombos },
   ];
 
   return (
@@ -128,10 +392,10 @@ export default function ProfilePage({ allCards = [] }) {
         </div>
 
         {/* Tab bar */}
-        <div style={{ display: "flex", gap: 4, marginBottom: 20, overflowX: "auto", paddingBottom: 2 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 20 }}>
           {tabs.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)} style={{
-              padding: "7px 14px", borderRadius: 8, border: "none", whiteSpace: "nowrap",
+              padding: "7px 12px", borderRadius: 8, border: "none",
               background: tab === t.id ? T.accentBg : T.surface,
               color: tab === t.id ? T.accent : T.textSecondary,
               fontSize: 12, fontWeight: tab === t.id ? 700 : 500, cursor: "pointer",
@@ -325,39 +589,68 @@ export default function ProfilePage({ allCards = [] }) {
               <div style={{ textAlign: "center", padding: 40, color: T.textMuted }}>
                 <div style={{ fontSize: 32, marginBottom: 8 }}>⭐</div>
                 <div>No favourite cards yet</div>
-                <div style={{ fontSize: 12, marginTop: 4 }}>Star cards in the Explorer or Wiki to save them here</div>
+                <div style={{ fontSize: 12, marginTop: 4 }}>Heart cards in the Explorer or Wiki to save them here</div>
               </div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {favourites.map(f => {
-                  const card = cardById[f.cardId];
-                  return (
-                    <div key={f.cardId} style={{
-                      background: T.surface, borderRadius: 10, border: `1px solid ${T.borderLight}`,
-                      padding: "10px 14px",
-                    }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <span style={{ color: T.accent, fontSize: 16 }}>⭐</span>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontSize: 13, fontWeight: 600, color: T.text }}>
-                            {card?.name || f.cardId}
-                          </div>
-                          {card && (
-                            <div style={{ fontSize: 10, color: T.textMuted, marginTop: 1 }}>
-                              {card.type} · {card.deck}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                      {f.notes && (
-                        <div style={{ fontSize: 11, color: T.textSecondary, marginTop: 6, paddingLeft: 28, fontStyle: "italic" }}>
-                          {f.notes}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                {favourites.map(f => (
+                  <FavCardRow key={f.cardId} fav={f} card={cardById[f.cardId]}
+                    onUpdate={(notes) => {
+                      fetch(`${API_BASE}/api/me/favourites`, {
+                        method: "POST", credentials: "include",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ cardId: f.cardId, notes }),
+                      });
+                      setFavourites(prev => prev.map(x => x.cardId === f.cardId ? { ...x, notes } : x));
+                    }}
+                    onRemove={() => {
+                      fetch(`${API_BASE}/api/me/favourites/${f.cardId}`, { method: "DELETE", credentials: "include" });
+                      setFavourites(prev => prev.filter(x => x.cardId !== f.cardId));
+                    }}
+                    onNavigate={onViewInWiki}
+                  />
+                ))}
               </div>
+            )}
+          </>
+        )}
+
+        {/* Combos tab */}
+        {tab === "combos" && (
+          <>
+            {!combos ? (
+              <div style={{ textAlign: "center", padding: 40, color: T.textMuted }}>Loading...</div>
+            ) : (
+              <>
+                <CreateComboWidget allCards={allCards} onCreated={(combo) => setCombos(prev => [combo, ...(prev || [])])} />
+                {combos.length === 0 ? (
+                  <div style={{ textAlign: "center", padding: 40, color: T.textMuted }}>
+                    <div style={{ fontSize: 32, marginBottom: 8 }}>🔗</div>
+                    <div>No saved combos yet</div>
+                    <div style={{ fontSize: 12, marginTop: 4 }}>Save combos from the Wiki or create your own above</div>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 12 }}>
+                    {combos.map(c => (
+                      <ComboRow key={c.id} combo={c} cardById={cardById}
+                        onUpdateNotes={(notes) => {
+                          fetch(`${API_BASE}/api/me/combos/${c.id}`, {
+                            method: "PUT", credentials: "include",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ cardIds: c.cardIds, notes }),
+                          });
+                          setCombos(prev => prev.map(x => x.id === c.id ? { ...x, notes } : x));
+                        }}
+                        onRemove={() => {
+                          fetch(`${API_BASE}/api/me/combos/${c.id}`, { method: "DELETE", credentials: "include" });
+                          setCombos(prev => prev.filter(x => x.id !== c.id));
+                        }}
+                        onNavigate={onViewInWiki}
+                      />
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </>
         )}

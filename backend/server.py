@@ -170,7 +170,8 @@ app = FastAPI(title="Agricola Explorer API",
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://agricola.veronahe.no", "https://agricola-explorer.fly.dev", "http://localhost:5173", "http://localhost:8000"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -236,30 +237,34 @@ class LoginBody(BaseModel):
 
 @app.post("/api/auth/register", summary="Create a new account")
 def register(body: RegisterBody):
-    uname = body.username.strip()
+    uname = " ".join(body.username.split())  # collapse all whitespace
     password = body.password
-    dname = body.displayName.strip() or uname
+    dname = " ".join(body.displayName.split()) or uname
     if not uname or len(uname) < 2:
         return JSONResponse({"error": "Username must be at least 2 characters"}, status_code=400)
     if len(password) < 4:
         return JSONResponse({"error": "Password must be at least 4 characters"}, status_code=400)
-    conn = _get_db()
-    taken = conn.execute("SELECT id FROM users WHERE username = ? COLLATE NOCASE", (uname,)).fetchone()
-    if taken:
-        return JSONResponse({"error": f"Username '{uname}' is already taken"}, status_code=409)
-    user_id = str(uuid.uuid4())
-    pw_hash = _hash_password(password)
-    conn.execute(
-        "INSERT INTO users (id, username, displayName, passwordHash, createdAt) VALUES (?, ?, ?, ?, ?)",
-        (user_id, uname, dname, pw_hash, datetime.datetime.utcnow().isoformat())
-    )
-    conn.commit()
-    _auto_claim(conn, user_id, uname)
-    session_token = _create_session(conn, user_id)
-    user_data = conn.execute("SELECT id, username, displayName FROM users WHERE id = ?", (user_id,)).fetchone()
-    resp = JSONResponse({"ok": True, "user": dict(user_data)})
-    resp.set_cookie("agricola_session", session_token, max_age=SESSION_MAX_AGE, httponly=True, samesite="lax", secure=False)
-    return resp
+    try:
+        conn = _get_db()
+        taken = conn.execute("SELECT id FROM users WHERE username = ? COLLATE NOCASE", (uname,)).fetchone()
+        if taken:
+            return JSONResponse({"error": f"Username '{uname}' is already taken"}, status_code=409)
+        user_id = str(uuid.uuid4())
+        pw_hash = _hash_password(password)
+        conn.execute(
+            "INSERT INTO users (id, username, displayName, passwordHash, createdAt) VALUES (?, ?, ?, ?, ?)",
+            (user_id, uname, dname, pw_hash, datetime.datetime.utcnow().isoformat())
+        )
+        conn.commit()
+        _auto_claim(conn, user_id, uname)
+        session_token = _create_session(conn, user_id)
+        user_data = conn.execute("SELECT id, username, displayName FROM users WHERE id = ?", (user_id,)).fetchone()
+        resp = JSONResponse({"ok": True, "user": dict(user_data)})
+        resp.set_cookie("agricola_session", session_token, max_age=SESSION_MAX_AGE, httponly=True, samesite="lax", secure=False)
+        return resp
+    except Exception as e:
+        print(f"[auth] Register error: {e}")
+        return JSONResponse({"error": "Server error — please try again"}, status_code=500)
 
 @app.post("/api/auth/login", summary="Sign in with username and password")
 def login(body: LoginBody):
@@ -397,6 +402,197 @@ def remove_favourite(card_id: str, request: Request):
     return {"ok": True}
 
 
+# ── User combos ──────────────────────────────────────────────────────────
+
+class ComboBody(BaseModel):
+    cardIds: list[str]
+    notes: str = ""
+
+@app.get("/api/me/combos", summary="Get current user's saved combos")
+def get_my_combos(request: Request):
+    user = _get_current_user(request)
+    if not user:
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+    conn = _get_db()
+    rows = conn.execute(
+        "SELECT id, cardIds, notes, createdAt FROM user_combos WHERE userId = ? ORDER BY createdAt DESC", (user["id"],)
+    ).fetchall()
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["cardIds"] = json.loads(d["cardIds"])
+        result.append(d)
+    return result
+
+@app.post("/api/me/combos", summary="Save a combo")
+def add_combo(body: ComboBody, request: Request):
+    user = _get_current_user(request)
+    if not user:
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+    if len(body.cardIds) < 2:
+        return JSONResponse({"error": "A combo needs at least 2 cards"}, status_code=400)
+    conn = _get_db()
+    now = datetime.datetime.utcnow().isoformat()
+    cur = conn.execute(
+        "INSERT INTO user_combos (userId, cardIds, notes, createdAt) VALUES (?, ?, ?, ?)",
+        (user["id"], json.dumps(body.cardIds), body.notes, now)
+    )
+    conn.commit()
+    return {"ok": True, "id": cur.lastrowid}
+
+@app.put("/api/me/combos/{combo_id}", summary="Update combo notes")
+def update_combo(combo_id: int, body: ComboBody, request: Request):
+    user = _get_current_user(request)
+    if not user:
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+    conn = _get_db()
+    conn.execute(
+        "UPDATE user_combos SET notes = ?, cardIds = ? WHERE id = ? AND userId = ?",
+        (body.notes, json.dumps(body.cardIds), combo_id, user["id"])
+    )
+    conn.commit()
+    return {"ok": True}
+
+@app.delete("/api/me/combos/{combo_id}", summary="Delete a saved combo")
+def delete_combo(combo_id: int, request: Request):
+    user = _get_current_user(request)
+    if not user:
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+    conn = _get_db()
+    conn.execute("DELETE FROM user_combos WHERE id = ? AND userId = ?", (combo_id, user["id"]))
+    conn.commit()
+    return {"ok": True}
+
+
+# ── Tournament endpoints ──────────────────────────────────────────────────────
+
+class TournamentBody(BaseModel):
+    name: str
+    startDate: str
+    endDate: str = ""
+    numGames: int = 0
+    numTables: int = 0
+    players: list = []
+    isActive: bool = True
+
+@app.get("/api/tournaments", summary="List all tournaments")
+def list_tournaments():
+    conn = _get_db()
+    rows = conn.execute("SELECT * FROM tournaments ORDER BY startDate DESC").fetchall()
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["players"] = json.loads(d["players"]) if d["players"] else []
+        d["isActive"] = bool(d["isActive"])
+        result.append(d)
+    return result
+
+@app.get("/api/tournaments/{tournament_id}", summary="Get a single tournament")
+def get_tournament(tournament_id: str):
+    conn = _get_db()
+    row = conn.execute("SELECT * FROM tournaments WHERE id = ?", (tournament_id,)).fetchone()
+    if not row:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    d = dict(row)
+    d["players"] = json.loads(d["players"]) if d["players"] else []
+    d["isActive"] = bool(d["isActive"])
+    return d
+
+@app.post("/api/tournaments", summary="Create a tournament")
+def create_tournament(body: TournamentBody, request: Request):
+    user = _get_current_user(request)
+    if not user:
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+    conn = _get_db()
+    tid = str(uuid.uuid4())
+    now = datetime.datetime.utcnow().isoformat()
+    conn.execute(
+        "INSERT INTO tournaments (id, name, startDate, endDate, numGames, numTables, players, isActive, createdBy, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (tid, body.name.strip(), body.startDate, body.endDate, body.numGames, body.numTables, json.dumps(body.players), 1 if body.isActive else 0, user["id"], now)
+    )
+    conn.commit()
+    return {"ok": True, "id": tid}
+
+@app.put("/api/tournaments/{tournament_id}", summary="Update a tournament")
+def update_tournament(tournament_id: str, body: TournamentBody, request: Request):
+    user = _get_current_user(request)
+    if not user:
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+    conn = _get_db()
+    conn.execute(
+        "UPDATE tournaments SET name=?, startDate=?, endDate=?, numGames=?, numTables=?, players=?, isActive=? WHERE id=?",
+        (body.name.strip(), body.startDate, body.endDate, body.numGames, body.numTables, json.dumps(body.players), 1 if body.isActive else 0, tournament_id)
+    )
+    conn.commit()
+    return {"ok": True}
+
+@app.patch("/api/tournaments/{tournament_id}/toggle", summary="Toggle tournament active status")
+def toggle_tournament(tournament_id: str, request: Request):
+    user = _get_current_user(request)
+    if not user:
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+    conn = _get_db()
+    conn.execute("UPDATE tournaments SET isActive = CASE WHEN isActive = 1 THEN 0 ELSE 1 END WHERE id = ?", (tournament_id,))
+    conn.commit()
+    row = conn.execute("SELECT isActive FROM tournaments WHERE id = ?", (tournament_id,)).fetchone()
+    return {"ok": True, "isActive": bool(dict(row)["isActive"])}
+
+@app.delete("/api/tournaments/{tournament_id}", summary="Delete a tournament (scores are kept)")
+def delete_tournament(tournament_id: str, request: Request):
+    user = _get_current_user(request)
+    if not user:
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+    conn = _get_db()
+    # Clear tournamentId on scores but keep the scores + tournament name text
+    conn.execute("UPDATE scores SET tournamentId = NULL WHERE tournamentId = ?", (tournament_id,))
+    conn.execute("DELETE FROM tournaments WHERE id = ?", (tournament_id,))
+    conn.commit()
+    return {"ok": True}
+
+@app.get("/api/tournaments/{tournament_id}/scores", summary="Get scores for a tournament")
+def get_tournament_scores(tournament_id: str):
+    conn = _get_db()
+    # Match by tournamentId or by tournament name for legacy scores
+    t = conn.execute("SELECT name FROM tournaments WHERE id = ?", (tournament_id,)).fetchone()
+    if not t:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    tname = dict(t)["name"]
+    rows = conn.execute(
+        "SELECT * FROM scores WHERE tournamentId = ? OR tournament = ? ORDER BY timestamp DESC",
+        (tournament_id, tname)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/events", summary="List unregistered event names from scores")
+def list_events():
+    conn = _get_db()
+    rows = conn.execute("""
+        SELECT tournament AS name, COUNT(*) AS scoreCount, MAX(timestamp) AS latestDate
+        FROM scores
+        WHERE tournament IS NOT NULL AND tournament != ''
+          AND (tournamentId IS NULL OR tournamentId = '')
+        GROUP BY tournament
+        ORDER BY MAX(timestamp) DESC
+    """).fetchall()
+    return [dict(r) for r in rows]
+
+@app.get("/api/events/{event_name}/scores", summary="Get scores for an unregistered event")
+def get_event_scores(event_name: str):
+    conn = _get_db()
+    rows = conn.execute(
+        "SELECT * FROM scores WHERE tournament = ? AND (tournamentId IS NULL OR tournamentId = '') ORDER BY timestamp DESC",
+        (event_name,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+@app.get("/api/users", summary="List registered usernames (public)")
+def list_users():
+    conn = _get_db()
+    rows = conn.execute("SELECT username, displayName FROM users ORDER BY username").fetchall()
+    return [dict(r) for r in rows]
+
+
 @app.get("/api/me/stats", summary="Get current user's statistics")
 def get_my_stats(request: Request):
     user = _get_current_user(request)
@@ -413,6 +609,7 @@ def get_my_stats(request: Request):
     challenge_count = conn.execute("SELECT COUNT(*) FROM challenge_attempts WHERE userId = ?", (uid,)).fetchone()[0]
     # Favourite count
     fav_count = conn.execute("SELECT COUNT(*) FROM favourites WHERE userId = ?", (uid,)).fetchone()[0]
+    combo_count = conn.execute("SELECT COUNT(*) FROM user_combos WHERE userId = ?", (uid,)).fetchone()[0]
     stats = {
         "gamesScored": len(score_totals),
         "bestScore": max(score_totals) if score_totals else None,
@@ -421,6 +618,7 @@ def get_my_stats(request: Request):
         "totalDrafts": draft_count,
         "totalChallenges": challenge_count,
         "totalFavourites": fav_count,
+        "totalCombos": combo_count,
     }
     # Score category averages
     if score_totals:
@@ -515,9 +713,10 @@ DRAFTS_DB_PATH = os.environ.get(
 def _get_db() -> sqlite3.Connection:
     """Return a connection to the drafts database, creating the table if needed."""
     os.makedirs(os.path.dirname(DRAFTS_DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DRAFTS_DB_PATH)
+    conn = sqlite3.connect(DRAFTS_DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")  # better concurrent read/write
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS drafts (
             id         TEXT PRIMARY KEY,
@@ -732,6 +931,32 @@ def _get_db() -> sqlite3.Connection:
         )
     """)
 
+    # ── Migrate old users table: rebuild if it has the old email-based schema ──
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+    if "email" in cols:
+        # Old schema had email; rebuild the table without it and with passwordHash
+        conn.execute("ALTER TABLE users RENAME TO users_old")
+        conn.execute("""
+            CREATE TABLE users (
+                id           TEXT PRIMARY KEY,
+                username     TEXT NOT NULL UNIQUE,
+                displayName  TEXT NOT NULL,
+                passwordHash TEXT NOT NULL DEFAULT '',
+                createdAt    TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            INSERT INTO users (id, username, displayName, passwordHash, createdAt)
+            SELECT id, username, displayName, '', createdAt FROM users_old
+        """)
+        conn.execute("DROP TABLE users_old")
+        conn.commit()
+        print("[migrate] Rebuilt users table: removed email, added passwordHash")
+    elif "passwordHash" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN passwordHash TEXT NOT NULL DEFAULT ''")
+        conn.commit()
+        print("[migrate] Added passwordHash column to users table")
+
     # ── Favourites table ─────────────────────────────────────────────────────
     conn.execute("""
         CREATE TABLE IF NOT EXISTS favourites (
@@ -744,6 +969,38 @@ def _get_db() -> sqlite3.Connection:
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_favs_user ON favourites(userId)")
+
+    # ── User combos table ────────────────────────────────────────────────────
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS user_combos (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            userId      TEXT NOT NULL,
+            cardIds     TEXT NOT NULL,
+            notes       TEXT DEFAULT '',
+            createdAt   TEXT NOT NULL
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ucombos_user ON user_combos(userId)")
+
+    # ── Tournaments table ─────────────────────────────────────────────────────
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS tournaments (
+            id          TEXT PRIMARY KEY,
+            name        TEXT NOT NULL,
+            startDate   TEXT NOT NULL,
+            endDate     TEXT,
+            numGames    INTEGER DEFAULT 0,
+            numTables   INTEGER DEFAULT 0,
+            players     TEXT DEFAULT '[]',
+            isActive    INTEGER DEFAULT 1,
+            createdBy   TEXT,
+            createdAt   TEXT NOT NULL
+        )
+    """)
+
+    # ── Migration: add tournamentId to scores if missing ────────────────────
+    if "tournamentId" not in score_cols:
+        conn.execute("ALTER TABLE scores ADD COLUMN tournamentId TEXT")
 
     # ── Migration: add user_id to existing tables ────────────────────────────
     for tbl in ["drafts", "scores"]:
@@ -1338,6 +1595,7 @@ def popular_cards(draftType: Optional[str] = None, limit: int = 15):
 class ScoreSaveRequest(BaseModel):
     name: str
     tournament: Optional[str] = None
+    tournamentId: Optional[str] = None
     tableNumber: Optional[str] = None
     gameNumber: Optional[str] = None
     startingPosition: Optional[str] = None  # "1st", "2nd", etc.
@@ -1361,9 +1619,10 @@ def save_score(req: ScoreSaveRequest, request: Request):
 
     conn = _get_db()
     conn.execute(
-        "INSERT INTO scores (id, name, tournament, tableNumber, gameNumber, startingPosition, valuesJson, pointsJson, total, timestamp, cardLog, userId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO scores (id, name, tournament, tournamentId, tableNumber, gameNumber, startingPosition, valuesJson, pointsJson, total, timestamp, cardLog, userId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (score_id, req.name.strip(),
          (req.tournament or "").strip() or None,
+         (req.tournamentId or "").strip() or None,
          (req.tableNumber or "").strip() or None,
          (req.gameNumber or "").strip() or None,
          (req.startingPosition or "").strip() or None,

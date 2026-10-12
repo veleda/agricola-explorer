@@ -1075,7 +1075,14 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
   const [lastPickPopularity, setLastPickPopularity] = useState({});
 
   const [showCommunity, setShowCommunity] = useState(false);
-  const [showDraftHand, setShowDraftHand] = useState(false);
+  // Tablet/desktop: own hand shown as a left sidebar (open by default)
+  const [isWide, setIsWide] = useState(() => typeof window !== "undefined" && window.innerWidth >= 700);
+  useEffect(() => {
+    const onResize = () => setIsWide(window.innerWidth >= 700);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const [showDraftHand, setShowDraftHand] = useState(() => typeof window !== "undefined" && window.innerWidth >= 700);
   const [showStats, setShowStats] = useState(true); // player toggle for card stats during draft
 
   // Undo: snapshot of the state before the last pick (one step only)
@@ -1859,6 +1866,19 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
   // ── Drafting screen ───────────────────────────────────────────────────
   if (phase === "drafting") {
     const currentPack = packs[0] || [];
+    const handToggleBtn = (
+      <button onClick={() => setShowDraftHand(s => !s)}
+        title={showDraftHand ? "Hide my hand" : "Show my hand"}
+        style={{
+          background: showDraftHand ? T.accentBg : T.surfaceAlt,
+          border: `1px solid ${showDraftHand ? T.accent : T.border}`,
+          borderRadius: 8, color: showDraftHand ? T.accent : T.textMuted,
+          padding: isWide ? "6px 12px" : "4px 10px", fontSize: isWide ? 13 : 11, fontWeight: 600, cursor: "pointer",
+          display: "flex", alignItems: "center", gap: 4,
+        }}>
+        {"\u270B"} {isWide ? "My hand " : ""}{isCombo ? occPicks.length + myPicks.length : myPicks.length}
+      </button>
+    );
 
     return (
       <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", background: T.bg }}>
@@ -1868,6 +1888,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
           borderBottom: `1px solid ${T.border}`, gap: 12, flexShrink: 0, flexWrap: "wrap",
           background: T.surface,
         }}>
+          {isWide && handToggleBtn}
           {isMini && (
             <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, background: "#fef2f2", color: T.red, fontWeight: 600 }}>
               {"\uD83C\uDDF3\uD83C\uDDF4"} Deck #{miniDeckNumber}
@@ -1914,18 +1935,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
               }}>
               {showStats ? "\uD83D\uDCCA" : "\uD83D\uDE48"} Stats
             </button>
-            {(myPicks.length > 0 || occPicks.length > 0) && (
-              <button onClick={() => setShowDraftHand(s => !s)}
-                style={{
-                  background: showDraftHand ? T.accentBg : T.surfaceAlt,
-                  border: `1px solid ${showDraftHand ? T.accent : T.border}`,
-                  borderRadius: 8, color: showDraftHand ? T.accent : T.textMuted,
-                  padding: "4px 10px", fontSize: 11, fontWeight: 600, cursor: "pointer",
-                  display: "flex", alignItems: "center", gap: 4,
-                }}>
-                {"\u270B"} {isCombo ? occPicks.length + myPicks.length : myPicks.length}
-              </button>
-            )}
+            {!isWide && (myPicks.length > 0 || occPicks.length > 0) && handToggleBtn}
             {myPicks.map((id, i) => {
               const c = allCards.find(x => x.id === id);
               return (
@@ -1945,12 +1955,22 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
           </div>
         </div>
 
+        {/* Body: hand panel (left sidebar on tablet, top panel on phone) + card grid */}
+        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: isWide ? "row" : "column", overflow: "hidden" }}>
         {/* Picked hand panel (collapsible) */}
-        {showDraftHand && (myPicks.length > 0 || occPicks.length > 0) && (
-          <div style={{
+        {showDraftHand && (isWide || myPicks.length > 0 || occPicks.length > 0) && (
+          <div style={isWide ? {
+            width: 250, flexShrink: 0, borderRight: `1px solid ${T.border}`, background: T.surfaceAlt,
+            padding: "12px", overflowY: "auto", WebkitOverflowScrolling: "touch", boxSizing: "border-box",
+          } : {
             borderBottom: `1px solid ${T.border}`, background: T.surfaceAlt,
             padding: "10px 16px", flexShrink: 0,
           }}>
+            {isWide && myPicks.length === 0 && occPicks.length === 0 && (
+              <div style={{ fontSize: 12, color: T.textMuted, textAlign: "center", padding: "24px 8px" }}>
+                {"\u270B"} Your picks will appear here
+              </div>
+            )}
             {/* In combo phase 2, show occupation picks from phase 1 */}
             {isCombo && comboPhase === 2 && occPicks.length > 0 && (
               <>
@@ -2036,7 +2056,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
         )}
 
         {/* Card grid */}
-        <div style={{ flex: 1, overflow: "auto", padding: 16 }}>
+        <div style={{ flex: 1, minWidth: 0, overflow: "auto", padding: 16 }}>
           <div style={{ textAlign: "center", marginBottom: 12, color: T.textSecondary, fontSize: 13 }}>
             {!showStats ? "Pick a card (stats hidden until draft complete):" : "Choose a card from this pack:"}
           </div>
@@ -2052,6 +2072,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
               />
             ))}
           </div>
+        </div>
         </div>
       </div>
     );
