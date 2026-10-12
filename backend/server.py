@@ -153,6 +153,42 @@ def _build_cards_json() -> list[dict]:
 
 print("Building card JSON …")
 ALL_CARDS = _build_cards_json()
+
+
+# ── Stable, human-readable slugs for shareable wiki links (/wiki/<slug>) ─────
+import unicodedata as _ud
+import re as _re_slug
+
+def _slugify(text: str) -> str:
+    t = _ud.normalize("NFKD", text or "").encode("ascii", "ignore").decode()
+    return _re_slug.sub(r"[^a-z0-9]+", "-", t.lower()).strip("-") or "card"
+
+def _assign_slugs(cards: list[dict]) -> None:
+    """Give every card a unique slug. When several cards share a name, the
+    Norwegian-deck (non-Revised) version gets the plain slug and the others
+    get the deck appended, e.g. 'bee-statue-revised-e'."""
+    groups: dict[str, list[dict]] = {}
+    for c in cards:
+        groups.setdefault(_slugify(c["name"]), []).append(c)
+    used = set(groups.keys())
+    for base, grp in groups.items():
+        if len(grp) == 1:
+            grp[0]["slug"] = base
+            continue
+        pref = (next((c for c in grp if c["isNo"] and not (c["deck"] or "").startswith("Revised")), None)
+                or next((c for c in grp if c["isNo"]), None) or grp[0])
+        pref["slug"] = base
+        for c in grp:
+            if c is pref:
+                continue
+            cand = f"{base}-{_slugify(c['deck'] or 'other')}"
+            final, n = cand, 2
+            while final in used:
+                final, n = f"{cand}-{n}", n + 1
+            used.add(final)
+            c["slug"] = final
+
+_assign_slugs(ALL_CARDS)
 print(f"  {len(ALL_CARDS)} cards ready.")
 
 # Pre-compute facet lists
@@ -2955,6 +2991,41 @@ if os.path.isdir(DIST_DIR):
     @app.get("/openapi.json", include_in_schema=False)
     def openapi_json():
         return app.openapi()
+
+    import html as _html
+    _CARDS_BY_SLUG: dict[str, dict] = {c["slug"]: c for c in ALL_CARDS}
+
+    @app.get("/wiki/{slug}", include_in_schema=False)
+    def wiki_card_share(slug: str, request: Request):
+        """Serve the SPA with per-card Open Graph tags so shared links get a preview."""
+        index_path = os.path.join(DIST_DIR, "index.html")
+        with open(index_path, "r", encoding="utf-8") as f:
+            page = f.read()
+        card = _CARDS_BY_SLUG.get(slug) or _CARDS_BY_ID.get(slug)
+        if card:
+            proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+            origin = f"{proto}://{request.headers.get('host', request.url.netloc)}"
+            img = card.get("imageUrl") or "/icon-512.png"
+            if img.startswith("/"):
+                img = origin + img
+            desc = (card.get("text") or "").strip()
+            if len(desc) > 200:
+                desc = desc[:197].rstrip() + "…"
+            title = f"{card['name']} – Agricola Card Wiki"
+            e = _html.escape
+            meta = (
+                f'<meta property="og:type" content="article" />'
+                f'<meta property="og:site_name" content="Agricola Explorer" />'
+                f'<meta property="og:title" content="{e(title)}" />'
+                f'<meta property="og:description" content="{e(desc)}" />'
+                f'<meta property="og:image" content="{e(img)}" />'
+                f'<meta property="og:url" content="{e(origin)}/wiki/{e(card["slug"])}" />'
+                f'<meta name="twitter:card" content="summary_large_image" />'
+                f'<meta name="description" content="{e(desc)}" />'
+            )
+            page = page.replace("<title>Agricola Explorer</title>", f"<title>{e(title)}</title>", 1)
+            page = page.replace("</head>", meta + "</head>", 1)
+        return HTMLResponse(page, headers={"Cache-Control": "no-cache"})
 
     @app.get("/{full_path:path}")
     def serve_spa(full_path: str, request: Request):

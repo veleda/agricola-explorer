@@ -55,6 +55,37 @@ export default function CardWiki({ allCards, listCards, norwayOnly, setNorwayOnl
     return m;
   }, [allCards]);
 
+  // ── Shareable URLs: keep /wiki/<slug> in the address bar ──
+  useEffect(() => {
+    const c = selectedCardId ? cardsById[selectedCardId] : null;
+    const path = c ? `/wiki/${c.slug || c.id}` : "/wiki";
+    if (window.location.pathname !== path) {
+      if (c) window.history.pushState(null, "", path);   // card pages get history entries (back button works)
+      else window.history.replaceState(null, "", path);
+    }
+    document.title = c ? `${c.name} – Agricola Card Wiki` : "Agricola Explorer";
+  }, [selectedCardId, cardsById]);
+
+  // Browser back/forward between wiki pages
+  useEffect(() => {
+    const onPop = () => {
+      const p = window.location.pathname;
+      if (!p.startsWith("/wiki")) return;
+      const key = decodeURIComponent(p.replace(/^\/wiki\/?/, ""));
+      if (!key) { setSelectedCardId(null); return; }
+      const c = allCards.find(x => x.slug === key || x.id === key);
+      setSelectedCardId(c ? c.id : null);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [allCards]);
+
+  // Leaving the wiki: reset the URL
+  useEffect(() => () => {
+    if (window.location.pathname.startsWith("/wiki")) window.history.replaceState(null, "", "/");
+    document.title = "Agricola Explorer";
+  }, []);
+
   const filtered = useMemo(() => {
     let list = browseCards;
     if (search) {
@@ -244,6 +275,25 @@ function CardWikiPage({ cardId, allCards, cardsById, onBack, onNavigate }) {
   const [showAddNobo, setShowAddNobo] = useState(false);
   const [showAddTip, setShowAddTip] = useState(false);
 
+  // ── Share link ──
+  const [linkCopied, setLinkCopied] = useState(false);
+  const shareCard = async () => {
+    const c = cardsById[cardId];
+    const url = `${window.location.origin}/wiki/${c?.slug || cardId}`;
+    const isTouch = window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
+    if (navigator.share && isTouch) {
+      try { await navigator.share({ title: c?.name, text: `${c?.name} – Agricola Card Wiki`, url }); return; }
+      catch (e) { if (e?.name === "AbortError") return; }
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
+    } catch {
+      window.prompt("Copy this link:", url);
+    }
+  };
+
   // ── Favourites ──
   const [isFav, setIsFav] = useState(false);
   const [favNote, setFavNote] = useState("");
@@ -381,6 +431,20 @@ function CardWikiPage({ cardId, allCards, cardsById, onBack, onNavigate }) {
             )}
           </div>
         </div>
+
+        {/* Share link */}
+        <button onClick={shareCard}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            padding: "8px 16px", borderRadius: 8, marginBottom: 16, marginRight: 8,
+            border: `1px solid ${linkCopied ? "#86efac" : T.border}`,
+            background: linkCopied ? "#f0fdf4" : T.bg,
+            color: linkCopied ? "#059669" : T.muted,
+            fontSize: 13, fontWeight: 500, cursor: "pointer", transition: "all 0.15s",
+          }}>
+          <span style={{ fontSize: 15 }}>{linkCopied ? "✓" : "🔗"}</span>
+          {linkCopied ? "Link copied!" : "Share"}
+        </button>
 
         {/* Favourite toggle */}
         {user && (

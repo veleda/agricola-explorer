@@ -1134,7 +1134,15 @@ export default function App() {
   // Route /challenge/{id} directly to drafter
   const initialMode = window.location.pathname.startsWith("/challenge/")
     ? "drafter"
+    : window.location.pathname.startsWith("/wiki")
+    ? "wiki"
     : (isMobile ? "home" : "explorer");
+  // Shared wiki link (/wiki/<slug>) — resolved to a card once cards are loaded
+  const initialWikiKey = useRef(
+    window.location.pathname.startsWith("/wiki/")
+      ? decodeURIComponent(window.location.pathname.slice("/wiki/".length)) || null
+      : null
+  );
   const [appMode, setAppMode] = useState(initialMode);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialMode === "drafter");
   const [handsDraftType, setHandsDraftType] = useState(null); // for linking from drafter
@@ -1343,6 +1351,12 @@ export default function App() {
     Promise.all([fetchCards(), fetchMeta()])
       .then(([cards, meta]) => {
         setAllCards(cards);
+        if (initialWikiKey.current) {
+          const key = initialWikiKey.current;
+          initialWikiKey.current = null;
+          const hit = cards.find(c => c.slug === key || c.id === key);
+          if (hit) setWikiCardId(hit.id);
+        }
         setMeta(meta);
         setLoading(false);
       })
