@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useAuth } from "./auth.jsx";
+import { track } from "./track.js";
 
 const API_BASE = "";
 
@@ -64,6 +65,7 @@ export default function CardWiki({ allCards, listCards, norwayOnly, setNorwayOnl
       else window.history.replaceState(null, "", path);
     }
     document.title = c ? `${c.name} – Agricola Card Wiki` : "Agricola Explorer";
+    if (c) track({ mode: "wiki-card", cardId: c.id });
   }, [selectedCardId, cardsById]);
 
   // Browser back/forward between wiki pages

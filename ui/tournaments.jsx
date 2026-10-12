@@ -436,10 +436,66 @@ export default function TournamentsPage() {
     }
   };
 
-  const handleDelete = async (id) => {
-    await fetch(`${API_BASE}/api/tournaments/${id}`, { method: "DELETE", credentials: "include" });
-    setTournaments(prev => prev.filter(t => t.id !== id));
+  const handleDelete = async (t) => {
+    if (!window.confirm(`Delete "${t.name}"?\n\nThe tournament is removed, but saved scores are kept.`)) return;
+    await fetch(`${API_BASE}/api/tournaments/${t.id}`, { method: "DELETE", credentials: "include" });
+    setTournaments(prev => prev.filter(x => x.id !== t.id));
+    load(); // its scores now show up under Game Nights & Events
   };
+
+  // ── Lists: active (all) + finished (5 newest, or search across all) ──
+  const LIMIT = 5;
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const byDateDesc = (a, b) => (b.endDate || b.startDate || "").localeCompare(a.endDate || a.startDate || "");
+  const activeList = useMemo(() => (tournaments || []).filter(t => t.isActive).sort(byDateDesc), [tournaments]);
+  const finishedList = useMemo(() => (tournaments || []).filter(t => !t.isActive).sort(byDateDesc), [tournaments]);
+  const matches = (t) => [t.name, t.startDate, t.endDate, ...(t.players || []).map(p => p.displayName || p.name || p.username)]
+    .filter(Boolean).some(v => String(v).toLowerCase().includes(q));
+  const finishedShown = q ? finishedList.filter(matches) : finishedList.slice(0, LIMIT);
+  const eventsShown = q
+    ? events.filter(ev => ev.name.toLowerCase().includes(q) || (ev.latestDate || "").includes(q))
+    : events.slice(0, LIMIT);
+
+  const sectionTitle = { fontSize: 15, fontWeight: 700, color: T.textSecondary, marginBottom: 10 };
+  const hintStyle = { fontSize: 11, color: T.textMuted, textAlign: "center", marginTop: 8 };
+  const rowStyle = { background: T.surface, borderRadius: 10, border: `1px solid ${T.borderLight}`, padding: "12px 16px" };
+
+  const renderTournamentRow = (t) => (
+    <div key={t.id} style={{ ...rowStyle, opacity: t.isActive ? 1 : 0.75 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{t.name}</span>
+            {t.isActive && (
+              <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 4, background: T.greenLight, color: T.green, fontWeight: 600 }}>ACTIVE</span>
+            )}
+          </div>
+          <div style={{ fontSize: 11, color: T.textMuted, marginTop: 2 }}>
+            {t.startDate}{t.endDate && t.endDate !== t.startDate ? ` – ${t.endDate}` : ""}
+            {t.players?.length > 0 && ` · ${t.players.length} players`}
+            {t.numGames > 0 && ` · ${t.numGames} games`}
+          </div>
+        </div>
+        <button onClick={() => setSelectedTournament(t)} title="Analytics"
+          style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: T.accent, padding: 4 }}>
+          {"📊"}
+        </button>
+        {user && (
+          <>
+            <button onClick={() => setEditingTournament(t)} title="Edit"
+              style={{ background: "none", border: "none", fontSize: 14, cursor: "pointer", color: T.textMuted, padding: 4 }}>{"✏️"}</button>
+            <button onClick={() => handleToggle(t.id)} title={t.isActive ? "Mark as finished" : "Reactivate"}
+              style={{ background: "none", border: "none", fontSize: 14, cursor: "pointer", color: t.isActive ? T.green : T.textMuted, padding: 4 }}>
+              {t.isActive ? "✅" : "⬜"}
+            </button>
+            <button onClick={() => handleDelete(t)} title="Delete tournament"
+              style={{ background: "none", border: "none", fontSize: 14, cursor: "pointer", color: T.textMuted, padding: 4 }}>{"🗑️"}</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
 
   if (selectedTournament) {
     return (
@@ -481,87 +537,87 @@ export default function TournamentsPage() {
           />
         )}
 
-        {/* Tournament list */}
         {!tournaments ? (
           <div style={{ textAlign: "center", padding: 40, color: T.textMuted }}>Loading...</div>
-        ) : tournaments.length === 0 ? (
+        ) : tournaments.length === 0 && events.length === 0 ? (
           <div style={{ textAlign: "center", padding: 40, color: T.textMuted }}>
             <div style={{ fontSize: 32, marginBottom: 8 }}>🏆</div>
             <div>No tournaments registered yet</div>
           </div>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {tournaments.map(t => (
-              <div key={t.id} style={{
-                background: T.surface, borderRadius: 10, border: `1px solid ${T.borderLight}`,
-                padding: "12px 16px", opacity: t.isActive ? 1 : 0.6,
-              }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{t.name}</span>
-                      {t.isActive && (
-                        <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 4, background: T.greenLight, color: T.green, fontWeight: 600 }}>ACTIVE</span>
-                      )}
-                    </div>
-                    <div style={{ fontSize: 11, color: T.textMuted, marginTop: 2 }}>
-                      {t.startDate}{t.endDate && t.endDate !== t.startDate ? ` – ${t.endDate}` : ""}
-                      {t.players?.length > 0 && ` · ${t.players.length} players`}
-                      {t.numGames > 0 && ` · ${t.numGames} games`}
-                    </div>
-                  </div>
-                  {/* Analytics button */}
-                  <button onClick={() => setSelectedTournament(t)} title="Analytics"
-                    style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: T.accent, padding: 4 }}>
-                    {"📊"}
-                  </button>
-                  {/* Edit / Toggle / Delete (logged in only) */}
-                  {user && (
-                    <>
-                      <button onClick={() => setEditingTournament(t)} title="Edit"
-                        style={{ background: "none", border: "none", fontSize: 14, cursor: "pointer", color: T.textMuted, padding: 4 }}>{"✏️"}</button>
-                      <button onClick={() => handleToggle(t.id)} title={t.isActive ? "Deactivate" : "Activate"}
-                        style={{ background: "none", border: "none", fontSize: 14, cursor: "pointer", color: t.isActive ? T.green : T.textMuted, padding: 4 }}>
-                        {t.isActive ? "✅" : "⬜"}
-                      </button>
-                      <button onClick={() => handleDelete(t.id)} title="Delete tournament"
-                        style={{ background: "none", border: "none", fontSize: 14, cursor: "pointer", color: T.textMuted, padding: 4 }}>{"🗑️"}</button>
-                    </>
+          <>
+            {/* ── Active tournaments ── */}
+            {activeList.length > 0 && (
+              <>
+                <div style={sectionTitle}>Active</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {activeList.map(renderTournamentRow)}
+                </div>
+              </>
+            )}
+
+            {/* ── Finished tournaments + game nights: 5 newest, search for the rest ── */}
+            {(finishedList.length > 0 || events.length > 0) && (
+              <>
+                <div style={{ ...sectionTitle, marginTop: activeList.length > 0 ? 28 : 0 }}>Finished</div>
+                <div style={{ position: "relative", marginBottom: 10 }}>
+                  <input value={query} onChange={e => setQuery(e.target.value)}
+                    placeholder="Search all tournaments and game nights…"
+                    style={{
+                      width: "100%", boxSizing: "border-box", padding: "9px 32px 9px 12px", borderRadius: 8,
+                      border: `1px solid ${T.border}`, background: T.surface, fontSize: 13, color: T.text,
+                      outline: "none", fontFamily: "inherit",
+                    }} />
+                  {query && (
+                    <button onClick={() => setQuery("")} aria-label="Clear search" style={{
+                      position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)",
+                      background: "none", border: "none", fontSize: 16, color: T.textMuted, cursor: "pointer", padding: 4,
+                    }}>{"×"}</button>
                   )}
                 </div>
-              </div>
-            ))}
-          </div>
-        )}
 
-        {/* ── Game Nights & Events (unregistered) ── */}
-        {events.length > 0 && (
-          <>
-            <div style={{ fontSize: 15, fontWeight: 700, color: T.textSecondary, marginTop: 28, marginBottom: 10 }}>
-              Game Nights & Events
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {events.map(ev => (
-                <div key={ev.name} style={{
-                  background: T.surface, borderRadius: 10, border: `1px solid ${T.borderLight}`,
-                  padding: "12px 16px",
-                }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{ev.name}</span>
-                      <div style={{ fontSize: 11, color: T.textMuted, marginTop: 2 }}>
-                        {ev.scoreCount} score{ev.scoreCount !== 1 ? "s" : ""}
-                        {ev.latestDate && ` · last played ${ev.latestDate.slice(0, 10)}`}
-                      </div>
-                    </div>
-                    <button onClick={() => setSelectedTournament({ name: ev.name, id: null })} title="Analytics"
-                      style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: T.accent, padding: 4 }}>
-                      {"📊"}
-                    </button>
+                {finishedShown.length > 0 && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {finishedShown.map(renderTournamentRow)}
                   </div>
-                </div>
-              ))}
-            </div>
+                )}
+                {!q && finishedList.length > LIMIT && (
+                  <div style={hintStyle}>Showing the {LIMIT} newest of {finishedList.length} finished tournaments — search to find older ones</div>
+                )}
+
+                {eventsShown.length > 0 && (
+                  <>
+                    <div style={{ ...sectionTitle, fontSize: 13, marginTop: 20 }}>Game Nights & Events</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {eventsShown.map(ev => (
+                        <div key={ev.name} style={rowStyle}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{ev.name}</span>
+                              <div style={{ fontSize: 11, color: T.textMuted, marginTop: 2 }}>
+                                {ev.scoreCount} score{ev.scoreCount !== 1 ? "s" : ""}
+                                {ev.latestDate && ` · last played ${ev.latestDate.slice(0, 10)}`}
+                              </div>
+                            </div>
+                            <button onClick={() => setSelectedTournament({ name: ev.name, id: null })} title="Analytics"
+                              style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: T.accent, padding: 4 }}>
+                              {"📊"}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+                {!q && events.length > LIMIT && (
+                  <div style={hintStyle}>Showing the {LIMIT} most recent of {events.length} game nights — search to find older ones</div>
+                )}
+
+                {q && finishedShown.length === 0 && eventsShown.length === 0 && (
+                  <div style={{ textAlign: "center", padding: 24, color: T.textMuted, fontSize: 13 }}>No tournaments match “{query}”</div>
+                )}
+              </>
+            )}
           </>
         )}
       </div>

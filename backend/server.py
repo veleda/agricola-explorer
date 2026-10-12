@@ -260,6 +260,40 @@ def _create_session(conn, user_id: str) -> str:
     return session_token
 
 
+# ── Admin account ───────────────────────────────────────────────────────────
+# The admin password is never stored in code: set the ADMIN_PASSWORD env var
+# (locally: export ADMIN_PASSWORD=...; on Fly: fly secrets set ADMIN_PASSWORD=...).
+ADMIN_USERNAME = "admin"
+
+def _is_admin(user: Optional[dict]) -> bool:
+    return bool(user) and user.get("username", "").lower() == ADMIN_USERNAME
+
+def _require_admin(request: Request) -> Optional[dict]:
+    user = _get_current_user(request)
+    return user if _is_admin(user) else None
+
+def _ensure_admin_account() -> None:
+    pw = os.environ.get("ADMIN_PASSWORD", "")
+    if not pw:
+        print("[admin] ADMIN_PASSWORD not set — admin account not provisioned")
+        return
+    conn = _get_db()
+    row = conn.execute("SELECT id, passwordHash FROM users WHERE username = ? COLLATE NOCASE", (ADMIN_USERNAME,)).fetchone()
+    if row is None:
+        conn.execute(
+            "INSERT INTO users (id, username, displayName, passwordHash, createdAt) VALUES (?, ?, ?, ?, ?)",
+            (str(uuid.uuid4()), ADMIN_USERNAME, "Admin", _hash_password(pw), datetime.datetime.utcnow().isoformat()),
+        )
+        conn.commit()
+        print("[admin] Admin account created")
+    elif not _verify_password(pw, dict(row)["passwordHash"] or ""):
+        # Password changed via env var: update it and sign out existing admin sessions
+        conn.execute("UPDATE users SET passwordHash = ? WHERE id = ?", (_hash_password(pw), dict(row)["id"]))
+        conn.execute("DELETE FROM sessions WHERE userId = ?", (dict(row)["id"],))
+        conn.commit()
+        print("[admin] Admin password updated")
+
+
 # ── Auth endpoints ──────────────────────────────────────────────────────────
 
 class RegisterBody(BaseModel):
@@ -282,6 +316,8 @@ def register(body: RegisterBody):
         return JSONResponse({"error": "Password must be at least 4 characters"}, status_code=400)
     try:
         conn = _get_db()
+        if uname.lower() == ADMIN_USERNAME:
+            return JSONResponse({"error": "That username is reserved"}, status_code=409)
         taken = conn.execute("SELECT id FROM users WHERE username = ? COLLATE NOCASE", (uname,)).fetchone()
         if taken:
             return JSONResponse({"error": f"Username '{uname}' is already taken"}, status_code=409)
@@ -600,6 +636,141 @@ def get_tournament_scores(tournament_id: str):
     return [dict(r) for r in rows]
 
 
+# ── Analytics (anonymous, cookie-free page-view counting) ───────────────────
+import re as _re_an
+try:
+    from zoneinfo import ZoneInfo as _ZoneInfo
+    _LOCAL_TZ = _ZoneInfo("Europe/Oslo")
+except Exception:
+    _LOCAL_TZ = datetime.timezone.utc
+
+_TRACK_MODES = {"home", "explorer", "drafter", "hands", "score", "wiki", "wiki-card",
+                "live", "tournament", "profile", "admin"}
+_BOT_RE = _re_an.compile(r"bot|crawl|spider|slurp|preview|facebookexternalhit|headless|monitor|curl|wget|python", _re_an.I)
+
+def _local_today() -> datetime.date:
+    return datetime.datetime.now(_LOCAL_TZ).date()
+
+def _daily_salt(conn, day: str) -> str:
+    row = conn.execute("SELECT salt FROM analytics_salts WHERE day = ?", (day,)).fetchone()
+    if row:
+        return dict(row)["salt"]
+    salt = secrets.token_hex(16)
+    conn.execute("INSERT OR IGNORE INTO analytics_salts (day, salt) VALUES (?, ?)", (day, salt))
+    # Old salts are discarded so visitor hashes can never be linked across days
+    conn.execute("DELETE FROM analytics_salts WHERE day < ?", ((_local_today() - datetime.timedelta(days=1)).isoformat(),))
+    conn.commit()
+    row = conn.execute("SELECT salt FROM analytics_salts WHERE day = ?", (day,)).fetchone()
+    return dict(row)["salt"]
+
+class TrackBody(BaseModel):
+    mode: str
+    cardId: Optional[str] = None
+    entry: bool = False
+    referrer: Optional[str] = None
+
+@app.post("/api/track", include_in_schema=False)
+def track(body: TrackBody, request: Request):
+    ua = request.headers.get("user-agent", "")
+    if not ua or _BOT_RE.search(ua):
+        return {"ok": True}
+    if _is_admin(_get_current_user(request)):
+        return {"ok": True}  # don't count the admin's own visits
+    try:
+        conn = _get_db()
+        day = _local_today().isoformat()
+        ip = (request.headers.get("fly-client-ip")
+              or request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+              or (request.client.host if request.client else ""))
+        visitor = hashlib.sha256(f"{_daily_salt(conn, day)}|{ip}|{ua}".encode()).hexdigest()[:16]
+        device = ("tablet" if _re_an.search(r"ipad|tablet", ua, _re_an.I)
+                  else "mobile" if _re_an.search(r"mobi|iphone|android", ua, _re_an.I) else "desktop")
+        mode = body.mode if body.mode in _TRACK_MODES else "other"
+        card_id = body.cardId if body.cardId and len(body.cardId) <= 64 else None
+        ref = None
+        if body.entry and body.referrer:
+            m = _re_an.match(r"https?://([^/:?#]+)", body.referrer)
+            host = (m.group(1).lower() if m else "")
+            own = request.headers.get("host", "").split(":")[0].lower()
+            if host and host != own:
+                ref = host[:100]
+        conn.execute(
+            "INSERT INTO pageviews (ts, day, mode, cardId, visitor, device, entry, referrer) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (datetime.datetime.utcnow().isoformat(), day, mode, card_id, visitor, device, 1 if body.entry else 0, ref),
+        )
+        conn.commit()
+    except Exception as e:
+        print(f"[track] {e}")
+    return {"ok": True}
+
+@app.get("/api/admin/stats", include_in_schema=False)
+def admin_stats(request: Request, days: int = 30):
+    if not _require_admin(request):
+        return JSONResponse({"error": "Admin only"}, status_code=403)
+    days = max(1, min(days, 365))
+    conn = _get_db()
+    today = _local_today()
+    since = (today - datetime.timedelta(days=days - 1)).isoformat()
+
+    rows = conn.execute("""
+        SELECT day, COUNT(*) AS views, SUM(entry) AS visits, COUNT(DISTINCT visitor) AS visitors
+        FROM pageviews WHERE day >= ? GROUP BY day
+    """, (since,)).fetchall()
+    by_day = {r["day"]: dict(r) for r in rows}
+    daily = []
+    for i in range(days):
+        d = (today - datetime.timedelta(days=days - 1 - i)).isoformat()
+        r = by_day.get(d, {})
+        daily.append({"day": d, "views": r.get("views", 0) or 0, "visits": r.get("visits", 0) or 0, "visitors": r.get("visitors", 0) or 0})
+
+    def _period(n):
+        tail = daily[-n:] if n <= len(daily) else daily
+        return {"views": sum(x["views"] for x in tail), "visits": sum(x["visits"] for x in tail),
+                "visitors": sum(x["visitors"] for x in tail)}
+
+    by_mode = [dict(r) for r in conn.execute(
+        "SELECT mode, COUNT(*) AS views FROM pageviews WHERE day >= ? GROUP BY mode ORDER BY views DESC", (since,)).fetchall()]
+    top_cards = []
+    for r in conn.execute("""SELECT cardId, COUNT(*) AS views FROM pageviews
+                             WHERE day >= ? AND cardId IS NOT NULL GROUP BY cardId ORDER BY views DESC LIMIT 15""", (since,)).fetchall():
+        c = _CARDS_BY_ID.get(r["cardId"])
+        top_cards.append({"id": r["cardId"], "name": c["name"] if c else r["cardId"], "slug": c.get("slug") if c else None, "views": r["views"]})
+    devices = [dict(r) for r in conn.execute("""SELECT device, COUNT(DISTINCT day || visitor) AS visitors
+                                                FROM pageviews WHERE day >= ? GROUP BY device ORDER BY visitors DESC""", (since,)).fetchall()]
+    referrers = [dict(r) for r in conn.execute("""SELECT referrer, COUNT(*) AS visits FROM pageviews
+                                                  WHERE day >= ? AND referrer IS NOT NULL GROUP BY referrer ORDER BY visits DESC LIMIT 10""", (since,)).fetchall()]
+    return {
+        "days": days, "daily": daily,
+        "today": _period(1), "last7": _period(7), "last30": _period(30), "period": _period(days),
+        "byMode": by_mode, "topCards": top_cards, "devices": devices, "referrers": referrers,
+    }
+
+@app.get("/api/admin/users", include_in_schema=False)
+def admin_users(request: Request):
+    if not _require_admin(request):
+        return JSONResponse({"error": "Admin only"}, status_code=403)
+    conn = _get_db()
+    rows = conn.execute("""
+        SELECT u.username, u.displayName, u.createdAt,
+               (SELECT COUNT(*) FROM scores WHERE userId = u.id) AS scores,
+               (SELECT COUNT(*) FROM drafts WHERE userId = u.id) AS drafts,
+               (SELECT MAX(expiresAt) FROM sessions WHERE userId = u.id) AS lastSessionExpiry
+        FROM users u ORDER BY u.createdAt DESC
+    """).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        exp = d.pop("lastSessionExpiry")
+        d["lastLogin"] = None
+        if exp:
+            try:
+                d["lastLogin"] = (datetime.datetime.fromisoformat(exp) - datetime.timedelta(seconds=SESSION_MAX_AGE)).isoformat()
+            except ValueError:
+                pass
+        out.append(d)
+    return out
+
+
 @app.get("/api/events", summary="List unregistered event names from scores")
 def list_events():
     conn = _get_db()
@@ -625,7 +796,7 @@ def get_event_scores(event_name: str):
 @app.get("/api/users", summary="List registered usernames (public)")
 def list_users():
     conn = _get_db()
-    rows = conn.execute("SELECT username, displayName FROM users ORDER BY username").fetchall()
+    rows = conn.execute("SELECT username, displayName FROM users WHERE username != ? COLLATE NOCASE ORDER BY username", (ADMIN_USERNAME,)).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -1019,6 +1190,26 @@ def _get_db() -> sqlite3.Connection:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_ucombos_user ON user_combos(userId)")
 
     # ── Tournaments table ─────────────────────────────────────────────────────
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS pageviews (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts        TEXT NOT NULL,
+            day       TEXT NOT NULL,
+            mode      TEXT NOT NULL,
+            cardId    TEXT,
+            visitor   TEXT NOT NULL,
+            device    TEXT,
+            entry     INTEGER DEFAULT 0,
+            referrer  TEXT
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_pageviews_day ON pageviews(day)")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS analytics_salts (
+            day   TEXT PRIMARY KEY,
+            salt  TEXT NOT NULL
+        )
+    """)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS tournaments (
             id          TEXT PRIMARY KEY,
@@ -2834,6 +3025,9 @@ def wiki_stats():
         "noboCounts": nobo_counts,
         "tipCounts": tip_counts,
     }
+
+
+_ensure_admin_account()
 
 
 # ── Linked Data: dereferenceable IRIs ────────────────────────────────────────
