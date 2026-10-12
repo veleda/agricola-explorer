@@ -77,6 +77,19 @@ def _to_int(v):
     return int(m.group()) if m else None
 
 
+FINAL_GAME = 10_000  # sort key for a game registered as "Finale"/"Final"
+
+
+def _game_no(v):
+    """Game number from the score sheet; 'Finale', 'Final', 'F' etc. mark the final round."""
+    if v is None:
+        return None
+    txt = str(v).strip()
+    if re.fullmatch(r"(?i)(finale?|f)(\s*\d*)?", txt):
+        return FINAL_GAME
+    return _to_int(txt)
+
+
 def _excel_rank(value, values):
     """Excel RANK(value, range) descending: 1 + number of strictly greater values."""
     return 1 + sum(1 for v in values if v > value)
@@ -122,7 +135,7 @@ def _prepare(tournament: dict, scores: list[dict]):
     # Latest score per (game, player)
     latest: dict[tuple[int, str], dict] = {}
     for s in sorted(scores, key=lambda x: x.get("timestamp") or ""):
-        g = _to_int(s.get("gameNumber"))
+        g = _game_no(s.get("gameNumber"))
         name = " ".join((s.get("name") or "").split())
         if not name:
             continue
@@ -186,7 +199,8 @@ def build_tournament_workbook(tournament: dict, scores: list[dict]) -> bytes:
     N = len(players)
     P = {p["key"]: p for p in players}
     start_no = {p["key"]: p["start_no"] for p in players}
-    has_final = bool(tournament.get("hasFinal")) and len(rounds) >= 2
+    final_by_name = any(r["game"] == FINAL_GAME for r in rounds)
+    has_final = (bool(tournament.get("hasFinal")) or final_by_name) and len(rounds) >= 2
     weight = float(tournament.get("finalWeight") or 1.25)
     R = len(rounds)
     n_normal = R - 1 if has_final else R
@@ -494,7 +508,7 @@ def build_tournament_workbook(tournament: dict, scores: list[dict]) -> bytes:
             seats.setdefault(t, {})[gi] = keys
     seat_pos = {}
     for s in scores:
-        g = _to_int(s.get("gameNumber"))
+        g = _game_no(s.get("gameNumber"))
         if g is not None:
             seat_pos[(g, _ident(s.get("name") or ""))] = _to_int(s.get("startingPosition"))
     r = 2

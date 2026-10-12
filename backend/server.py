@@ -644,10 +644,6 @@ def get_tournament_scores(tournament_id: str):
 
 @app.get("/api/tournaments/{tournament_id}/export.xlsx", summary="Download tournament results (NM template format)")
 def export_tournament_xlsx(tournament_id: str):
-    try:
-        from tournament_export import build_tournament_workbook
-    except ModuleNotFoundError:
-        from backend.tournament_export import build_tournament_workbook
     conn = _get_db()
     t = conn.execute("SELECT * FROM tournaments WHERE id = ?", (tournament_id,)).fetchone()
     if not t:
@@ -657,8 +653,16 @@ def export_tournament_xlsx(tournament_id: str):
         "SELECT * FROM scores WHERE tournamentId = ? OR tournament = ? ORDER BY timestamp",
         (tournament_id, tour["name"])
     ).fetchall()
+    return _xlsx_export_response(tour, [dict(r) for r in rows])
+
+
+def _xlsx_export_response(tour: dict, scores: list[dict]):
     try:
-        data = build_tournament_workbook(tour, [dict(r) for r in rows])
+        from tournament_export import build_tournament_workbook
+    except ModuleNotFoundError:
+        from backend.tournament_export import build_tournament_workbook
+    try:
+        data = build_tournament_workbook(tour, scores)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     safe = _re_slug.sub(r'[^\w\- ]+', "", tour["name"]).strip() or "tournament"
@@ -826,6 +830,21 @@ def get_event_scores(event_name: str):
         (event_name,)
     ).fetchall()
     return [dict(r) for r in rows]
+
+@app.get("/api/events/{event_name}/export.xlsx", summary="Download game night / event results (NM template format)")
+def export_event_xlsx(event_name: str):
+    conn = _get_db()
+    rows = [dict(r) for r in conn.execute(
+        "SELECT * FROM scores WHERE tournament = ? AND (tournamentId IS NULL OR tournamentId = '') ORDER BY timestamp",
+        (event_name,)
+    ).fetchall()]
+    if not rows:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    days = sorted((r.get("timestamp") or "")[:10] for r in rows if r.get("timestamp"))
+    tour = {"id": f"event:{event_name}", "name": event_name, "startDate": days[0] if days else "",
+            "endDate": days[-1] if days else "", "players": [], "hasFinal": False, "finalWeight": 1.25}
+    return _xlsx_export_response(tour, rows)
+
 
 @app.get("/api/users", summary="List registered usernames (public)")
 def list_users():
