@@ -546,6 +546,16 @@ class TournamentBody(BaseModel):
     numTables: int = 0
     players: list = []
     isActive: bool = True
+    hasFinal: bool = False
+    finalWeight: float = 1.25
+
+def _tournament_row(r) -> dict:
+    d = dict(r)
+    d["players"] = json.loads(d["players"]) if d["players"] else []
+    d["isActive"] = bool(d["isActive"])
+    d["hasFinal"] = bool(d.get("hasFinal"))
+    d["finalWeight"] = d.get("finalWeight") if d.get("finalWeight") is not None else 1.25
+    return d
 
 @app.get("/api/tournaments", summary="List all tournaments")
 def list_tournaments():
@@ -553,10 +563,7 @@ def list_tournaments():
     rows = conn.execute("SELECT * FROM tournaments ORDER BY startDate DESC").fetchall()
     result = []
     for r in rows:
-        d = dict(r)
-        d["players"] = json.loads(d["players"]) if d["players"] else []
-        d["isActive"] = bool(d["isActive"])
-        result.append(d)
+        result.append(_tournament_row(r))
     return result
 
 @app.get("/api/tournaments/{tournament_id}", summary="Get a single tournament")
@@ -565,10 +572,7 @@ def get_tournament(tournament_id: str):
     row = conn.execute("SELECT * FROM tournaments WHERE id = ?", (tournament_id,)).fetchone()
     if not row:
         return JSONResponse({"error": "Not found"}, status_code=404)
-    d = dict(row)
-    d["players"] = json.loads(d["players"]) if d["players"] else []
-    d["isActive"] = bool(d["isActive"])
-    return d
+    return _tournament_row(row)
 
 @app.post("/api/tournaments", summary="Create a tournament")
 def create_tournament(body: TournamentBody, request: Request):
@@ -579,8 +583,9 @@ def create_tournament(body: TournamentBody, request: Request):
     tid = str(uuid.uuid4())
     now = datetime.datetime.utcnow().isoformat()
     conn.execute(
-        "INSERT INTO tournaments (id, name, startDate, endDate, numGames, numTables, players, isActive, createdBy, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (tid, body.name.strip(), body.startDate, body.endDate, body.numGames, body.numTables, json.dumps(body.players), 1 if body.isActive else 0, user["id"], now)
+        "INSERT INTO tournaments (id, name, startDate, endDate, numGames, numTables, players, isActive, createdBy, createdAt, hasFinal, finalWeight) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (tid, body.name.strip(), body.startDate, body.endDate, body.numGames, body.numTables, json.dumps(body.players), 1 if body.isActive else 0, user["id"], now,
+         1 if body.hasFinal else 0, body.finalWeight)
     )
     conn.commit()
     return {"ok": True, "id": tid}
@@ -592,8 +597,9 @@ def update_tournament(tournament_id: str, body: TournamentBody, request: Request
         return JSONResponse({"error": "Not logged in"}, status_code=401)
     conn = _get_db()
     conn.execute(
-        "UPDATE tournaments SET name=?, startDate=?, endDate=?, numGames=?, numTables=?, players=?, isActive=? WHERE id=?",
-        (body.name.strip(), body.startDate, body.endDate, body.numGames, body.numTables, json.dumps(body.players), 1 if body.isActive else 0, tournament_id)
+        "UPDATE tournaments SET name=?, startDate=?, endDate=?, numGames=?, numTables=?, players=?, isActive=?, hasFinal=?, finalWeight=? WHERE id=?",
+        (body.name.strip(), body.startDate, body.endDate, body.numGames, body.numTables, json.dumps(body.players), 1 if body.isActive else 0,
+         1 if body.hasFinal else 0, body.finalWeight, tournament_id)
     )
     conn.commit()
     return {"ok": True}
@@ -634,6 +640,34 @@ def get_tournament_scores(tournament_id: str):
         (tournament_id, tname)
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+@app.get("/api/tournaments/{tournament_id}/export.xlsx", summary="Download tournament results (NM template format)")
+def export_tournament_xlsx(tournament_id: str):
+    try:
+        from tournament_export import build_tournament_workbook
+    except ModuleNotFoundError:
+        from backend.tournament_export import build_tournament_workbook
+    conn = _get_db()
+    t = conn.execute("SELECT * FROM tournaments WHERE id = ?", (tournament_id,)).fetchone()
+    if not t:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    tour = _tournament_row(t)
+    rows = conn.execute(
+        "SELECT * FROM scores WHERE tournamentId = ? OR tournament = ? ORDER BY timestamp",
+        (tournament_id, tour["name"])
+    ).fetchall()
+    try:
+        data = build_tournament_workbook(tour, [dict(r) for r in rows])
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    safe = _re_slug.sub(r'[^\w\- ]+', "", tour["name"]).strip() or "tournament"
+    from urllib.parse import quote
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=\"{safe.encode('ascii', 'ignore').decode() or 'tournament'}.xlsx\"; filename*=UTF-8''{quote(tour['name'])}.xlsx"},
+    )
 
 
 # ── Analytics (anonymous, cookie-free page-view counting) ───────────────────
@@ -1228,6 +1262,12 @@ def _get_db() -> sqlite3.Connection:
     # ── Migration: add tournamentId to scores if missing ────────────────────
     if "tournamentId" not in score_cols:
         conn.execute("ALTER TABLE scores ADD COLUMN tournamentId TEXT")
+    # ── Migration: final-round settings on tournaments ──────────────────────
+    t_cols = {row[1] for row in conn.execute("PRAGMA table_info(tournaments)").fetchall()}
+    if "hasFinal" not in t_cols:
+        conn.execute("ALTER TABLE tournaments ADD COLUMN hasFinal INTEGER DEFAULT 0")
+    if "finalWeight" not in t_cols:
+        conn.execute("ALTER TABLE tournaments ADD COLUMN finalWeight REAL DEFAULT 1.25")
 
     # ── Migration: add user_id to existing tables ────────────────────────────
     for tbl in ["drafts", "scores"]:
