@@ -825,6 +825,68 @@ def seat_final(tournament_id: str, request: Request):
     return _load_tournament(conn, tournament_id)
 
 
+def _find_participant(players: list, name: str) -> Optional[dict]:
+    key = " ".join((name or "").split()).casefold()
+    for p in players or []:
+        if _plabel(p).casefold() == key:
+            return p
+    return None
+
+
+class ClaimRequest(BaseModel):
+    name: str
+
+
+@app.post("/api/tournaments/{tournament_id}/claim", summary="Link a tournament participant to the logged-in user")
+def claim_participant(tournament_id: str, body: ClaimRequest, request: Request):
+    user = _get_current_user(request)
+    if not user:
+        return JSONResponse({"error": "Sign in to link your profile"}, status_code=401)
+    conn = _get_db()
+    row = conn.execute("SELECT * FROM tournaments WHERE id = ?", (tournament_id,)).fetchone()
+    if not row:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    players = json.loads(row["players"] or "[]")
+    part = _find_participant(players, body.name)
+    if part is None:
+        return JSONResponse({"error": "That name is not on the participant list"}, status_code=404)
+    if part.get("userId") and part["userId"] != user["id"]:
+        return JSONResponse({"error": f"'{_plabel(part)}' is already linked to another profile ({part.get('username')})"}, status_code=409)
+    mine = next((p for p in players if p.get("userId") == user["id"]), None)
+    if mine is not None and mine is not part:
+        return JSONResponse({"error": f"Your profile is already linked to '{_plabel(mine)}' in this tournament"}, status_code=409)
+    part["userId"], part["username"] = user["id"], user["username"]
+    conn.execute("UPDATE tournaments SET players = ? WHERE id = ?", (json.dumps(players), tournament_id))
+    # Earlier scores for this participant in this tournament now belong to the user
+    conn.execute("UPDATE scores SET userId = ? WHERE tournamentId = ? AND name = ? COLLATE NOCASE",
+                 (user["id"], tournament_id, _plabel(part)))
+    conn.commit()
+    return _load_tournament(conn, tournament_id)
+
+
+@app.delete("/api/tournaments/{tournament_id}/claim", summary="Unlink a participant (yourself, or anyone as tournament admin)")
+def unclaim_participant(tournament_id: str, name: str, request: Request):
+    user = _get_current_user(request)
+    if not user:
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+    conn = _get_db()
+    row = conn.execute("SELECT * FROM tournaments WHERE id = ?", (tournament_id,)).fetchone()
+    if not row:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    players = json.loads(row["players"] or "[]")
+    part = _find_participant(players, name)
+    if part is None or not part.get("userId"):
+        return _load_tournament(conn, tournament_id)
+    if part["userId"] != user["id"] and not _is_td(user):
+        return JSONResponse({"error": "You can only unlink yourself"}, status_code=403)
+    uid = part.pop("userId"); part.pop("username", None)
+    conn.execute("UPDATE tournaments SET players = ? WHERE id = ?", (json.dumps(players), tournament_id))
+    conn.execute("UPDATE scores SET userId = NULL WHERE tournamentId = ? AND name = ? COLLATE NOCASE AND userId = ?",
+                 (tournament_id, _plabel(part), uid))
+    conn.commit()
+    return _load_tournament(conn, tournament_id)
+
+
 class ImportRequest(BaseModel):
     filename: str = ""
     data: str                      # base64-encoded .xlsx
@@ -2134,6 +2196,15 @@ def save_score(req: ScoreSaveRequest, request: Request):
     user_id = user["id"] if user else None
 
     conn = _get_db()
+    # Tournament scores belong to the participant's linked profile (if any),
+    # not to whoever happens to be logged in while entering them.
+    tid_req = (req.tournamentId or "").strip()
+    if tid_req:
+        trow = conn.execute("SELECT players FROM tournaments WHERE id = ?", (tid_req,)).fetchone()
+        if trow:
+            part = _find_participant(json.loads(trow["players"] or "[]"), req.name)
+            if part is not None:
+                user_id = part.get("userId")
     conn.execute(
         "INSERT INTO scores (id, name, tournament, tournamentId, tableNumber, gameNumber, startingPosition, valuesJson, pointsJson, total, timestamp, cardLog, userId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (score_id, req.name.strip(),

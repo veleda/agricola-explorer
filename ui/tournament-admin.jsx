@@ -177,6 +177,21 @@ function SetupTab({ tour, onSaved, onDeleted }) {
             Use the names players will pick in the score sheet. You can paste a list from a spreadsheet.
           </div>
           {dupes.length > 0 && <div style={{ fontSize: 12, color: T.red, marginTop: 6 }}>Duplicate names: {dupes.join(", ")}</div>}
+          {tour && (tour.players || []).some(p => p.userId) && (
+            <div style={{ marginTop: 10 }}>
+              <label style={label}>Linked to player profiles</label>
+              {(tour.players || []).filter(p => p.userId).map(p => (
+                <div key={labelOf(p)} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: T.textSecondary, padding: "2px 0" }}>
+                  🔗 <b style={{ color: T.text }}>{labelOf(p)}</b> → {p.username}
+                  <button onClick={async () => {
+                    if (!window.confirm(`Unlink "${labelOf(p)}" from ${p.username}?`)) return;
+                    try { await api(`/api/tournaments/${tour.id}/claim?name=${encodeURIComponent(labelOf(p))}`, { method: "DELETE" }); onSaved(tour.id); }
+                    catch (e) { alert(e.message); }
+                  }} style={{ marginLeft: "auto", background: "none", border: "none", color: T.textMuted, fontSize: 11, textDecoration: "underline", cursor: "pointer" }}>unlink</button>
+                </div>
+              ))}
+            </div>
+          )}
           {drawOutdated && (
             <div style={{ fontSize: 12, color: T.accent, background: T.accentBg, padding: "6px 8px", marginTop: 8 }}>
               The participant list differs from the current draw — draw again (or adjust the draw) after saving.

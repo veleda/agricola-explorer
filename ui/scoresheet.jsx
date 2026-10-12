@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { useAuth } from "./auth.jsx";
 
 const API_BASE = "";
 
@@ -920,6 +921,63 @@ export default function ScoreSheet({ allCards = [] }) {
              others: rnd[idx].filter(n => n.toLowerCase() !== name.trim().toLowerCase()) };
   }, [selTour, name, gameNumber]);
   useEffect(() => { if (seatInfo) setTableNumber(String(seatInfo.table)); }, [seatInfo]);
+
+  // ── Link a tournament participant ("Øyvind") to the logged-in profile ("Øyvind K") ──
+  const { user: authUser } = useAuth();
+  const partLabel = (p) => (p.displayName || p.name || p.username || "").trim();
+  const myPart = selTour && authUser ? (selTour.players || []).find(p => p.userId === authUser.id) || null : null;
+  const selPart = selTour && name ? (selTour.players || []).find(p => partLabel(p).toLowerCase() === name.trim().toLowerCase()) || null : null;
+  const [linkBusy, setLinkBusy] = useState(false);
+  const [linkError, setLinkError] = useState(null);
+  const autoTried = useRef(new Set());
+  const norm = (x) => (x || "").toLowerCase().normalize("NFC").replace(/\s+/g, " ").trim();
+  const looksLikeMe = (n) => {
+    if (!authUser) return false;
+    const target = norm(n);
+    return [authUser.displayName, authUser.username].map(norm).filter(Boolean).some(c =>
+      c === target || c.split(/[\s._-]+/)[0] === target || c.startsWith(target + " "));
+  };
+  const replaceTour = (t) => setActiveTournaments(prev => prev.map(x => (x.id === t.id ? t : x)));
+  const claim = useCallback(async (participantName) => {
+    if (!selTour) return;
+    setLinkBusy(true); setLinkError(null);
+    try {
+      const res = await fetch(`/api/tournaments/${selTour.id}/claim`, {
+        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: participantName }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not link");
+      replaceTour(data);
+    } catch (e) { setLinkError(e.message); }
+    setLinkBusy(false);
+  }, [selTour]);
+  const unclaim = async (participantName) => {
+    if (!selTour) return;
+    setLinkBusy(true); setLinkError(null);
+    try {
+      const res = await fetch(`/api/tournaments/${selTour.id}/claim?name=${encodeURIComponent(participantName)}`, { method: "DELETE", credentials: "include" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not unlink");
+      replaceTour(data);
+    } catch (e) { setLinkError(e.message); }
+    setLinkBusy(false);
+  };
+  // Pre-select your own name when you are already linked in the chosen tournament
+  useEffect(() => { if (myPart && !name) setName(partLabel(myPart)); }, [myPart?.name, tournamentId]);
+  // Auto-link when the chosen name matches your profile and neither is linked yet
+  useEffect(() => {
+    if (!authUser || !selPart || selPart.userId || myPart || linkBusy) return;
+    const key = `${selTour.id}|${partLabel(selPart)}`;
+    if (autoTried.current.has(key) || !looksLikeMe(partLabel(selPart))) return;
+    autoTried.current.add(key);
+    claim(partLabel(selPart));
+  }, [authUser, selPart, myPart, linkBusy]);
+  const linkStatus = !authUser || !selPart ? null
+    : selPart.userId === authUser.id ? "mine"
+    : selPart.userId ? "other"
+    : myPart ? null
+    : "unlinked";
   const [values, setValues] = useState(defaultValues);
   const [showRef, setShowRef] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -1273,7 +1331,11 @@ export default function ScoreSheet({ allCards = [] }) {
                   outline: "none", boxSizing: "border-box", cursor: "pointer",
                 }}>
                 <option value="">— Choose your name —</option>
-                {participants.map(p => <option key={p} value={p}>{p}</option>)}
+                {participants.map(p => {
+                  const pp = (selTour?.players || []).find(x => partLabel(x) === p);
+                  const mine = authUser && pp?.userId === authUser.id;
+                  return <option key={p} value={p}>{p}{mine ? " (you)" : pp?.userId ? " 🔗" : ""}</option>;
+                })}
               </select>
             ) : (
             <input
@@ -1290,6 +1352,28 @@ export default function ScoreSheet({ allCards = [] }) {
               onBlur={e => e.target.style.borderColor = name ? T.border : T.accent + "60"}
             />
             )}
+            {linkStatus === "mine" && (
+              <div style={{ fontSize: 12, color: T.blue, marginTop: 6, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                🔗 Linked to your profile ({authUser.displayName || authUser.username}) — your scores in this tournament show up under My Agricola
+                <button onClick={() => unclaim(partLabel(selPart))} disabled={linkBusy}
+                  style={{ background: "none", border: "none", color: T.textMuted, fontSize: 11, textDecoration: "underline", cursor: "pointer", padding: 0 }}>
+                  Not you? Unlink
+                </button>
+              </div>
+            )}
+            {linkStatus === "unlinked" && (
+              <div style={{ fontSize: 12, color: T.textSecondary, marginTop: 6, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                Is this you?
+                <button onClick={() => claim(partLabel(selPart))} disabled={linkBusy}
+                  style={{ padding: "3px 10px", border: `1px solid ${T.blue}`, background: "transparent", color: T.blue, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                  {linkBusy ? "Linking…" : `🔗 Link "${partLabel(selPart)}" to my profile`}
+                </button>
+              </div>
+            )}
+            {linkStatus === "other" && (
+              <div style={{ fontSize: 12, color: T.textMuted, marginTop: 6 }}>🔗 Linked to {selPart.username}</div>
+            )}
+            {linkError && <div style={{ fontSize: 12, color: T.red, marginTop: 4 }}>{linkError}</div>}
             {seatInfo && (
               <div style={{ fontSize: 12, color: T.green, marginTop: 6 }}>
                 {"✓"} {seatInfo.label}: table {seatInfo.table}
