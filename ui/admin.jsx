@@ -162,6 +162,18 @@ function UsersTab() {
   const [users, setUsers] = useState(null);
   const [error, setError] = useState(null);
   const [q, setQ] = useState("");
+  const [reset, setReset] = useState(null);   // { username, password }
+  const [copied, setCopied] = useState(false);
+
+  const resetPassword = async (username) => {
+    if (!window.confirm(`Reset the password for "${username}"?\n\nThey will be signed out everywhere and must use the temporary password you get next.`)) return;
+    try {
+      const res = await fetch(`/api/admin/users/${encodeURIComponent(username)}/reset-password`, { method: "POST", credentials: "include" });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not reset password");
+      setReset({ username: d.username, password: d.password }); setCopied(false);
+    } catch (e) { alert(e.message); }
+  };
 
   useEffect(() => {
     fetch("/api/admin/users", { credentials: "include" })
@@ -188,6 +200,24 @@ function UsersTab() {
         <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search…"
           style={{ marginLeft: "auto", padding: "6px 10px", border: `1px solid ${T.border}`, borderRadius: 6, fontSize: 12, outline: "none", width: 160 }} />
       </div>
+      {reset && (
+        <div style={{ background: T.accentBg, border: `1px solid ${T.accent}`, padding: "12px 14px", marginBottom: 12 }}>
+          <div style={{ fontSize: 13, color: T.text, marginBottom: 6 }}>
+            Temporary password for <b>{reset.username}</b> — send it to them. They'll be asked to choose their own password when they sign in.
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <code style={{ fontSize: 18, fontWeight: 700, letterSpacing: 1, background: T.surface, padding: "4px 10px", border: `1px solid ${T.border}` }}>{reset.password}</code>
+            <button onClick={async () => {
+              try { await navigator.clipboard.writeText(`Username: ${reset.username}\nTemporary password: ${reset.password}`); setCopied(true); }
+              catch { window.prompt("Copy:", reset.password); }
+            }} style={{ padding: "5px 10px", border: `1px solid ${T.border}`, background: T.surface, fontSize: 12, cursor: "pointer" }}>
+              {copied ? "✓ Copied" : "Copy"}
+            </button>
+            <button onClick={() => setReset(null)} style={{ marginLeft: "auto", background: "none", border: "none", color: T.textMuted, fontSize: 12, cursor: "pointer", textDecoration: "underline" }}>Done</button>
+          </div>
+          <div style={{ fontSize: 11, color: T.textMuted, marginTop: 6 }}>The password is shown only once.</div>
+        </div>
+      )}
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
@@ -198,6 +228,7 @@ function UsersTab() {
               <th style={th}>Last sign-in</th>
               <th style={{ ...th, textAlign: "right" }}>Scores</th>
               <th style={{ ...th, textAlign: "right" }}>Drafts</th>
+              <th style={th}></th>
             </tr>
           </thead>
           <tbody>
@@ -209,6 +240,14 @@ function UsersTab() {
                 <td style={{ ...td, color: T.textSecondary, whiteSpace: "nowrap" }}>{fmtDate(u.lastLogin)}</td>
                 <td style={{ ...td, textAlign: "right" }}>{u.scores}</td>
                 <td style={{ ...td, textAlign: "right" }}>{u.drafts}</td>
+                <td style={{ ...td, textAlign: "right" }}>
+                  {!["admin", "tournament-admin"].includes(u.username.toLowerCase()) && (
+                    <button onClick={() => resetPassword(u.username)} style={{
+                      padding: "3px 8px", border: `1px solid ${T.border}`, background: T.surface, color: T.textSecondary,
+                      fontSize: 11, cursor: "pointer", whiteSpace: "nowrap",
+                    }}>🔑 Reset password</button>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>

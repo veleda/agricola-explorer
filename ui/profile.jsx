@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { useAuth } from "./auth.jsx";
+import { useAuth, ChangePasswordForm } from "./auth.jsx";
 
 const API_BASE = "";
 
@@ -297,6 +297,7 @@ function CreateComboWidget({ allCards, onCreated }) {
 
 export default function ProfilePage({ allCards = [], onViewInWiki }) {
   const { user, setUser } = useAuth();
+  const [showPw, setShowPw] = useState(false);
   const [tab, setTab] = useState("overview"); // overview | scores | drafts | challenges | favourites
   const [stats, setStats] = useState(null);
   const [scores, setScores] = useState(null);
@@ -385,11 +386,30 @@ export default function ProfilePage({ allCards = [], onViewInWiki }) {
             </div>
             <div style={{ fontSize: 12, color: T.textMuted }}>@{user.username}</div>
           </div>
+          <button onClick={() => setShowPw(v => !v)} style={{
+            padding: "6px 10px", borderRadius: 8, border: `1px solid ${showPw ? T.accent : T.border}`,
+            background: showPw ? T.accentBg : T.surface, color: showPw ? T.accent : T.textMuted, fontSize: 11, cursor: "pointer",
+          }}>🔑 Password</button>
           <button onClick={handleLogout} style={{
             padding: "6px 14px", borderRadius: 8, border: `1px solid ${T.border}`,
             background: T.surface, color: T.textMuted, fontSize: 11, cursor: "pointer",
           }}>Sign out</button>
         </div>
+
+        {(showPw || user.mustChangePassword) && (
+          <div style={{
+            background: user.mustChangePassword ? T.accentBg : T.surface, border: `1px solid ${user.mustChangePassword ? T.accent : T.border}`,
+            borderRadius: 12, padding: "16px 18px", marginBottom: 20,
+          }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: T.text, marginBottom: 4 }}>Change password</div>
+            {user.mustChangePassword && (
+              <div style={{ fontSize: 12, color: T.accent, marginBottom: 12 }}>
+                You're using a temporary password from the admin — please choose your own. Enter the temporary password as "current password".
+              </div>
+            )}
+            <ChangePasswordForm />
+          </div>
+        )}
 
         {/* Tab bar */}
         <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 20 }}>

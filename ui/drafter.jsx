@@ -1911,7 +1911,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
           <div style={{ fontSize: 12, color: T.textMuted }}>
             {currentPack.length} cards remaining
           </div>
-          <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", minWidth: 0 }}>
             {undoSnapshot && (
               <button onClick={handleUndo}
                 title="Undo last pick"
@@ -1956,7 +1956,10 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
         </div>
 
         {/* Body: hand panel (left sidebar on tablet, top panel on phone) + card grid */}
-        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: isWide ? "row" : "column", overflow: "hidden" }}>
+        <div style={{
+          flex: 1, minHeight: 0, display: "flex", flexDirection: isWide ? "row" : "column",
+          overflow: isWide ? "hidden" : "auto", WebkitOverflowScrolling: "touch", overscrollBehavior: "contain",
+        }}>
         {/* Picked hand panel (collapsible) */}
         {showDraftHand && (isWide || myPicks.length > 0 || occPicks.length > 0) && (
           <div style={isWide ? {
@@ -2056,7 +2059,7 @@ export default function Drafter({ allCards, norwayOnly, setNorwayOnly, onViewHan
         )}
 
         {/* Card grid */}
-        <div style={{ flex: 1, minWidth: 0, overflow: "auto", padding: 16 }}>
+        <div style={isWide ? { flex: 1, minWidth: 0, overflow: "auto", padding: 16 } : { flex: "none", padding: 16 }}>
           <div style={{ textAlign: "center", marginBottom: 12, color: T.textSecondary, fontSize: 13 }}>
             {!showStats ? "Pick a card (stats hidden until draft complete):" : "Choose a card from this pack:"}
           </div>

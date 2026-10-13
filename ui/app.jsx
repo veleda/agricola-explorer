@@ -1622,7 +1622,9 @@ export default function App() {
           }} />
 
           {/* Content */}
-          <div style={{ position: "relative", zIndex: 2, flex: 1, display: "flex", flexDirection: "column", justifyContent: "flex-end", padding: "24px 20px 20px", overflowY: "auto", overscrollBehavior: "contain" }}>
+          <div style={{ position: "relative", zIndex: 2, flex: 1, minHeight: 0, display: "flex", flexDirection: "column", padding: "24px 20px 20px", overflowY: "auto", overscrollBehavior: "contain", WebkitOverflowScrolling: "touch" }}>
+            {/* marginTop:auto keeps the menu at the bottom when it fits, and stays scrollable when it doesn't */}
+            <div style={{ marginTop: "auto" }}>
             {/* Logo / title */}
             <div style={{ textAlign: "center", marginBottom: 28 }}>
               <img src="/agricola-icon-no.png" alt="Agricola" style={{
@@ -1664,6 +1666,7 @@ export default function App() {
                   <div style={{ fontSize: 20, color: "rgba(255,255,255,0.4)", flexShrink: 0 }}>{"\u203A"}</div>
                 </button>
               ))}
+            </div>
             </div>
           </div>
 

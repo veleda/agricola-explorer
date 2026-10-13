@@ -45,10 +45,72 @@ const T = {
   red: "#dc2626", purple: "#7c3aed",
 };
 
+// ── Change password (used after a reset and in My Agricola) ─────────────────
+export function ChangePasswordForm({ knownCurrent = null, onDone, onSkip }) {
+  const { user, setUser } = useAuth();
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [repeat, setRepeat] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+
+  const mismatch = repeat && next !== repeat;
+  const canSave = (knownCurrent || current) && next.length >= 4 && next === repeat && !busy;
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!canSave) return;
+    setBusy(true); setError("");
+    try {
+      const res = await fetch(`${API_BASE}/api/me/password`, {
+        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentPassword: knownCurrent || current, newPassword: next }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not change password");
+      if (user) setUser({ ...user, mustChangePassword: false });
+      setDone(true); setCurrent(""); setNext(""); setRepeat("");
+      onDone && onDone();
+    } catch (err) { setError(err.message); }
+    setBusy(false);
+  };
+
+  const inp = {
+    width: "100%", padding: "9px 12px", borderRadius: 8, border: `1.5px solid ${T.border}`, background: T.bg,
+    fontSize: 14, color: T.text, outline: "none", boxSizing: "border-box", marginBottom: 10,
+  };
+  const lbl = { display: "block", fontSize: 11, fontWeight: 600, color: T.textSecondary, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 };
+  return (
+    <form onSubmit={submit}>
+      {!knownCurrent && (
+        <>
+          <label style={lbl}>Current password</label>
+          <input type="password" autoComplete="current-password" value={current} onChange={e => setCurrent(e.target.value)} style={inp} />
+        </>
+      )}
+      <label style={lbl}>New password</label>
+      <input type="password" autoComplete="new-password" value={next} onChange={e => setNext(e.target.value)} placeholder="At least 4 characters" style={inp} autoFocus={!!knownCurrent} />
+      <label style={lbl}>Repeat new password</label>
+      <input type="password" autoComplete="new-password" value={repeat} onChange={e => setRepeat(e.target.value)} style={{ ...inp, borderColor: mismatch ? T.red : T.border }} />
+      {mismatch && <div style={{ fontSize: 12, color: T.red, marginBottom: 8 }}>The passwords don't match</div>}
+      {error && <div style={{ fontSize: 12, color: T.red, marginBottom: 8 }}>{error}</div>}
+      {done && !onDone && <div style={{ fontSize: 12, color: T.green, marginBottom: 8 }}>✓ Password changed</div>}
+      <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        <button type="submit" disabled={!canSave} style={{
+          padding: "9px 18px", borderRadius: 8, border: "none", fontSize: 14, fontWeight: 600,
+          background: canSave ? T.accent : T.borderLight, color: canSave ? "#fff" : T.textMuted, cursor: canSave ? "pointer" : "default",
+        }}>{busy ? "Saving…" : "Save new password"}</button>
+        {onSkip && <span onClick={onSkip} style={{ fontSize: 12, color: T.textMuted, cursor: "pointer", textDecoration: "underline" }}>Later</span>}
+      </div>
+    </form>
+  );
+}
+
 // ── Sign In Modal ───────────────────────────────────────────────────────────
 export function SignInModal({ onClose }) {
   const { setUser } = useAuth();
-  const [mode, setMode] = useState("login"); // login | register
+  const [mode, setMode] = useState("login"); // login | register | change
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -73,7 +135,8 @@ export function SignInModal({ onClose }) {
       const data = await res.json();
       if (data.ok) {
         setUser(data.user);
-        onClose();
+        if (mode === "login" && data.user?.mustChangePassword) setMode("change");   // temporary password from admin
+        else onClose();
       } else {
         setError(data.error || "Something went wrong");
       }
@@ -86,14 +149,14 @@ export function SignInModal({ onClose }) {
 
   const overlayStyle = {
     position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)",
-    display: "flex", alignItems: "center", justifyContent: "center",
-    zIndex: 9999, padding: 20,
+    display: "flex", alignItems: "flex-start", justifyContent: "center",
+    zIndex: 9999, padding: 20, overflowY: "auto", WebkitOverflowScrolling: "touch",
   };
 
   const modalStyle = {
     background: T.surface, borderRadius: 16, padding: "32px 28px",
     maxWidth: 400, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,0.15)",
-    position: "relative",
+    position: "relative", margin: "auto 0",   // centred, but scrollable when taller than the screen
   };
 
   const inputStyle = {
@@ -122,6 +185,15 @@ export function SignInModal({ onClose }) {
           border: "none", fontSize: 20, color: T.textMuted, cursor: "pointer",
         }}>×</button>
 
+        {mode === "change" ? (
+          <div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: T.text, marginBottom: 4 }}>Choose your own password</div>
+            <div style={{ fontSize: 13, color: T.textMuted, marginBottom: 20 }}>
+              You signed in with a temporary password from the admin. Pick a new one that only you know.
+            </div>
+            <ChangePasswordForm knownCurrent={password} onDone={onClose} onSkip={onClose} />
+          </div>
+        ) : (
         <form onSubmit={handleSubmit}>
           <div style={{ fontSize: 22, fontWeight: 800, color: T.text, marginBottom: 4 }}>
             {mode === "register" ? "Create account" : "Sign in"}
@@ -164,6 +236,9 @@ export function SignInModal({ onClose }) {
           )}
 
           {error && <div style={{ fontSize: 12, color: T.red, marginBottom: 8 }}>{error}</div>}
+          {error && mode === "login" && (
+            <div style={{ fontSize: 12, color: T.textMuted, marginBottom: 8 }}>Forgot your password? Ask the admin to reset it — you'll get a temporary one.</div>
+          )}
 
           <button type="submit" disabled={sending || !username.trim() || !password} style={btnStyle}>
             {sending ? "..." : mode === "register" ? "Create account" : "Sign in"}
@@ -183,6 +258,7 @@ export function SignInModal({ onClose }) {
             )}
           </div>
         </form>
+        )}
       </div>
     </div>
   );

@@ -235,12 +235,14 @@ def _get_current_user(request: Request) -> Optional[dict]:
         return None
     conn = _get_db()
     row = conn.execute(
-        "SELECT s.userId, u.username, u.displayName FROM sessions s JOIN users u ON s.userId = u.id WHERE s.token = ? AND s.expiresAt > ?",
+        "SELECT s.userId, u.username, u.displayName, u.mustChangePassword FROM sessions s JOIN users u ON s.userId = u.id WHERE s.token = ? AND s.expiresAt > ?",
         (session_token, datetime.datetime.utcnow().isoformat())
     ).fetchone()
     if not row:
         return None
-    return {"id": dict(row)["userId"], "username": dict(row)["username"], "displayName": dict(row)["displayName"]}
+    d = dict(row)
+    return {"id": d["userId"], "username": d["username"], "displayName": d["displayName"],
+            "mustChangePassword": bool(d.get("mustChangePassword"))}
 
 
 def _auto_claim(conn, user_id: str, username: str):
@@ -360,16 +362,43 @@ def login(body: LoginBody):
     if not uname or not password:
         return JSONResponse({"error": "Username and password required"}, status_code=400)
     conn = _get_db()
-    row = conn.execute("SELECT id, username, displayName, passwordHash FROM users WHERE username = ? COLLATE NOCASE", (uname,)).fetchone()
+    row = conn.execute("SELECT id, username, displayName, passwordHash, mustChangePassword FROM users WHERE username = ? COLLATE NOCASE", (uname,)).fetchone()
     if not row:
         return JSONResponse({"error": "Invalid username or password"}, status_code=401)
     user = dict(row)
     if not user.get("passwordHash") or not _verify_password(password, user["passwordHash"]):
         return JSONResponse({"error": "Invalid username or password"}, status_code=401)
     session_token = _create_session(conn, user["id"])
-    resp = JSONResponse({"ok": True, "user": {"id": user["id"], "username": user["username"], "displayName": user["displayName"]}})
+    resp = JSONResponse({"ok": True, "user": {"id": user["id"], "username": user["username"], "displayName": user["displayName"],
+                                              "mustChangePassword": bool(user.get("mustChangePassword"))}})
     resp.set_cookie("agricola_session", session_token, max_age=SESSION_MAX_AGE, httponly=True, samesite="lax", secure=False)
     return resp
+
+
+class ChangePasswordBody(BaseModel):
+    currentPassword: str
+    newPassword: str
+
+
+@app.post("/api/me/password", summary="Change your password")
+def change_password(body: ChangePasswordBody, request: Request):
+    user = _get_current_user(request)
+    if not user:
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+    if len(body.newPassword) < 4:
+        return JSONResponse({"error": "Password must be at least 4 characters"}, status_code=400)
+    conn = _get_db()
+    row = conn.execute("SELECT passwordHash FROM users WHERE id = ?", (user["id"],)).fetchone()
+    if not row or not _verify_password(body.currentPassword, row["passwordHash"] or ""):
+        return JSONResponse({"error": "Current password is wrong"}, status_code=403)
+    if body.newPassword == body.currentPassword:
+        return JSONResponse({"error": "Choose a new password that differs from the current one"}, status_code=400)
+    conn.execute("UPDATE users SET passwordHash = ?, mustChangePassword = 0 WHERE id = ?",
+                 (_hash_password(body.newPassword), user["id"]))
+    # sign out other devices, keep this session
+    conn.execute("DELETE FROM sessions WHERE userId = ? AND token != ?", (user["id"], request.cookies.get("agricola_session", "")))
+    conn.commit()
+    return {"ok": True}
 
 
 @app.get("/api/auth/me", summary="Get current user",
@@ -1071,6 +1100,24 @@ def admin_stats(request: Request, days: int = 30):
         "byMode": by_mode, "topCards": top_cards, "devices": devices, "referrers": referrers,
     }
 
+@app.post("/api/admin/users/{username}/reset-password", include_in_schema=False)
+def admin_reset_password(username: str, request: Request):
+    if not _require_admin(request):
+        return JSONResponse({"error": "Admin only"}, status_code=403)
+    if username.lower() in RESERVED_USERNAMES:
+        return JSONResponse({"error": "This account's password is set on the server (Fly secret)"}, status_code=400)
+    conn = _get_db()
+    row = conn.execute("SELECT id, username FROM users WHERE username = ? COLLATE NOCASE", (username,)).fetchone()
+    if not row:
+        return JSONResponse({"error": "User not found"}, status_code=404)
+    alphabet = "abcdefghjkmnpqrstuvwxyz23456789"   # no look-alikes (l/1, o/0, i)
+    temp = "-".join("".join(secrets.choice(alphabet) for _ in range(4)) for _ in range(3))
+    conn.execute("UPDATE users SET passwordHash = ?, mustChangePassword = 1 WHERE id = ?", (_hash_password(temp), row["id"]))
+    conn.execute("DELETE FROM sessions WHERE userId = ?", (row["id"],))
+    conn.commit()
+    return {"ok": True, "username": row["username"], "password": temp}
+
+
 @app.get("/api/admin/users", include_in_schema=False)
 def admin_users(request: Request):
     if not _require_admin(request):
@@ -1504,6 +1551,9 @@ def _get_db() -> sqlite3.Connection:
         conn.execute("ALTER TABLE users ADD COLUMN passwordHash TEXT NOT NULL DEFAULT ''")
         conn.commit()
         print("[migrate] Added passwordHash column to users table")
+    if "mustChangePassword" not in {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}:
+        conn.execute("ALTER TABLE users ADD COLUMN mustChangePassword INTEGER DEFAULT 0")
+        conn.commit()
 
     # ── Favourites table ─────────────────────────────────────────────────────
     conn.execute("""
