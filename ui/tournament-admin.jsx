@@ -486,7 +486,7 @@ function SheetTab({ tour }) {
                             <span style={{ flex: 1, color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.name}</span>
                             <span style={{ width: 60, textAlign: "right" }}><ScoreCell seat={s} onCommit={v => commit(r, t, s, v)} /></span>
                             <span style={{ width: 46, textAlign: "right", color: (s.relSc || 0) >= 0 ? T.green : T.red }}>{fmt(s.relSc)}</span>
-                            <span style={{ width: 30, textAlign: "right", color: T.textSecondary }} title={s.tie ? "Tie at this table" : ""}>{s.tabRank ?? ""}{s.tie ? "=" : ""}</span>
+                            <span style={{ width: 30, textAlign: "right", color: T.textSecondary }} title={s.tie ? "Tie at this table – points shared equally" : ""}>{s.tabRank ?? ""}{s.tie ? "=" : ""}</span>
                             <span style={{ width: 40, textAlign: "right", fontWeight: 700, color: T.accent }}>{fmt(s.turnP, 2)}</span>
                           </div>
                         ))}
@@ -537,7 +537,7 @@ function SheetTab({ tour }) {
             </table>
           )}
           <div style={{ fontSize: 10, color: T.textMuted, marginTop: 8, lineHeight: 1.4 }}>
-            Points per table 10/6/3/1{tour.hasFinal ? ` (×${tour.finalWeight} in the final)` : ""}. Ties broken by RelSc (score minus table average).
+            Points per table 10/6/3/1{tour.hasFinal ? ` (×${tour.finalWeight} in the final)` : ""}; players with the same score at a table share the points equally (e.g. two tied for 1st get 8 each). Equal totals are ranked by RelSc (score minus table average).
             {tour.hasFinal ? " In the final, placings are decided table by table." : ""}
           </div>
         </div>

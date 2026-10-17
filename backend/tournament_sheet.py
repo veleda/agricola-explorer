@@ -3,6 +3,7 @@ Live tournament spreadsheet for the tournament admin view.
 
 Uses exactly the same rules as the Excel export (tournament_export.py):
 * per table: RelSc = score - table average, table rank (Excel RANK), points 10/6/3/1
+  (players with the same score share the points for the places they occupy equally)
 * ZTurnP / ZRelSc = cumulative points / relative score
 * standings by ZTurnP, then ZRelSc
 * final (optional): points x weight, placings decided table by table
@@ -15,9 +16,9 @@ from __future__ import annotations
 from statistics import mean
 
 try:
-    from tournament_export import (FINAL_GAME, _excel_rank, _nb_key, _points, _prepare)
+    from tournament_export import (FINAL_GAME, _excel_rank, _nb_key, _points, _shared_points, _prepare)
 except ModuleNotFoundError:
-    from backend.tournament_export import (FINAL_GAME, _excel_rank, _nb_key, _points, _prepare)
+    from backend.tournament_export import (FINAL_GAME, _excel_rank, _nb_key, _points, _shared_points, _prepare)
 
 
 def compute_sheet(tournament: dict, scores: list[dict]) -> dict:
@@ -46,7 +47,7 @@ def compute_sheet(tournament: dict, scores: list[dict]) -> dict:
                 if has:
                     v = float(rnd["scores"][x])
                     rank = _excel_rank(v, vals)
-                    pts = _points(rank) * (weight if is_final else 1)
+                    pts = _shared_points(v, vals) * (weight if is_final else 1)
                     K[x], G[x] = pts, v - avg
                 else:
                     missing.append({"game": rnd["game"], "label": label, "table": t, "name": P[x]["name"]})

@@ -43,7 +43,7 @@ ROUND_STYLE = {
 FINAL_STANDINGS_STYLE = {"title": 235, "note": 236, "header": 237, "first": 238, "mid": 239, "group_last": 241, "last": 265}
 NCOLS = 31  # A..AE
 
-TIE_NOTE = "Tie at this table – the template says to adjust manually for ties if your rules require it."
+TIE_NOTE = "Tie at this table – the tied players share the points for the places they occupy equally (e.g. two tied for 1st get (10+6)/2 = 8 each)."
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -97,6 +97,30 @@ def _excel_rank(value, values):
 
 def _points(rank: int) -> int:
     return 10 if rank == 1 else 6 if rank == 2 else 3 if rank == 3 else 1
+
+
+def _shared_points(value, values) -> float:
+    """Table points with ties shared equally: players with the same score split
+    the points for the places they occupy (two tied for 1st: (10+6)/2 = 8 each)."""
+    rank = _excel_rank(value, values)
+    n = sum(1 for v in values if v == value)
+    return sum(_points(r) for r in range(rank, rank + n)) / n
+
+
+def _shared_points_formula(r: int, gs: int, ge: int) -> str:
+    """Excel version of _shared_points for the row r in table rows gs..ge."""
+    def p(expr):
+        return f"IF({expr}=1,10,IF({expr}=2,6,IF({expr}=3,3,1)))"
+    n = f"COUNTIF(F${gs}:F${ge},F{r})"
+    size = ge - gs + 1
+    if size <= 1:
+        return p(f"H{r}")
+    parts = [p(f"H{r}")] + [f"IF({n}>={i + 1},{p(f'(H{r}+{i})')},0)" for i in range(1, size)]
+    return f"({'+'.join(parts)})/{n}"
+
+
+def _is_frac(v) -> bool:
+    return isinstance(v, float) and abs(v - round(v)) > 1e-9
 
 
 class _Styler:
@@ -332,7 +356,7 @@ def build_tournament_workbook(tournament: dict, scores: list[dict]) -> bytes:
                 H[x] = _excel_rank(v, vals)
                 if vals.count(v) > 1:
                     ties.add(x)
-                K[x] = _points(H[x]) * (weight if is_final else 1)
+                K[x] = _shared_points(v, vals) * (weight if is_final else 1)
         if k == 1:
             M = {x: K[x] for x in P}
             Nn = {x: G[x] for x in P}
@@ -441,12 +465,16 @@ def build_tournament_workbook(tournament: dict, scores: list[dict]) -> bytes:
                 _put(ws, r, 6, F[x])
                 _put(ws, r, 7, f"=F{r}-AVERAGE(F${gs}:F${ge})")
                 _put(ws, r, 8, f"=RANK(F{r},F${gs}:F${ge})")
-                pts = f"IF(H{r}=1,10,IF(H{r}=2,6,IF(H{r}=3,3,1)))"
+                pts = _shared_points_formula(r, gs, ge) if x in ties else f"IF(H{r}=1,10,IF(H{r}=2,6,IF(H{r}=3,3,1)))"
                 _put(ws, r, 9, f"={weight_ref}*{pts}" if kind == "final" else f"={pts}")
                 _put(ws, r, 10, H[x], TIE_NOTE if x in ties else None)
                 _put(ws, r, 11, K[x])
+                if _is_frac(K[x]):   # e.g. 4.5 – don't let the integer format hide it
+                    ws.cell(r, 9).number_format = ws.cell(r, 11).number_format = "General"
             if k == 1:
                 _put(ws, r, 18, f"=J{r}"); _put(ws, r, 19, f"=C{r}"); _put(ws, r, 20, f"=K{r}"); _put(ws, r, 21, f"=G{r}")
+                if _is_frac(float(K[x])):
+                    ws.cell(r, 20).number_format = "General"
             else:
                 _put(ws, r, 13, f"=D{r}+K{r}")
                 _put(ws, r, 14, f"=E{r}+G{r}")
@@ -458,6 +486,8 @@ def build_tournament_workbook(tournament: dict, scores: list[dict]) -> bytes:
                     _put(ws, r, 15, f"=RANK(M{r},M${ds}:M${de},0)")
                 _put(ws, r, 16, Pr[x], "Tied on both ZTurnP and ZRelSc – ordered alphabetically." if x in full_ties else None)
                 _put(ws, r, 18, f"=P{r}"); _put(ws, r, 19, f"=C{r}"); _put(ws, r, 20, f"=M{r}"); _put(ws, r, 21, f"=N{r}")
+                if _is_frac(float(M[x])):
+                    ws.cell(r, 13).number_format = ws.cell(r, 20).number_format = "General"
 
         # W..Z and AB..AE lists (pasted values in the template)
         if kind in ("r1", "mid"):
@@ -467,10 +497,14 @@ def build_tournament_workbook(tournament: dict, scores: list[dict]) -> bytes:
                 _put(ws, r, 23, H[x] if k == 1 else Pr[x])
                 _put(ws, r, 24, P[x]["name"])
                 _put(ws, r, 25, M[x]); _put(ws, r, 26, Nn[x])
+                if _is_frac(float(M[x])):
+                    ws.cell(r, 25).number_format = "General"
             ranked = sorted(P, key=lambda x: Pr[x])
             for i, x in enumerate(ranked):
                 r = ds + i
                 _put(ws, r, 28, i + 1); _put(ws, r, 29, P[x]["name"]); _put(ws, r, 30, M[x]); _put(ws, r, 31, Nn[x])
+                if _is_frac(float(M[x])):
+                    ws.cell(r, 30).number_format = "General"
             rank_row = {x: ds + i for i, x in enumerate(ranked)}
             prev = {"alpha": (ds, de, ("X", "Y", "Z")), "rank": Pr, "rank_row": rank_row, "rank_cols": ("AC", "AD", "AE")}
             standings_src = ("ab", "ae", ds, de, [(i + 1, P[x]["name"], M[x], Nn[x]) for i, x in enumerate(ranked)])
@@ -479,6 +513,8 @@ def build_tournament_workbook(tournament: dict, scores: list[dict]) -> bytes:
             for i, x in enumerate(ranked):
                 r = ds + i
                 _put(ws, r, 23, Pr[x]); _put(ws, r, 24, P[x]["name"]); _put(ws, r, 25, M[x]); _put(ws, r, 26, Nn[x])
+                if _is_frac(float(M[x])):
+                    ws.cell(r, 25).number_format = "General"
             rank_row = {x: ds + i for i, x in enumerate(ranked)}
             prev = {"alpha": None, "rank": Pr, "rank_row": rank_row, "rank_cols": ("X", "Y", "Z")}
             standings_src = ("w", "z", ds, de, [(Pr[x], P[x]["name"], M[x], Nn[x]) for x in ranked])

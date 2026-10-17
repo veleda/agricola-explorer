@@ -47,9 +47,216 @@ async function downloadTemplateXlsx(tournament) {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
+/* ── Minimise / expand for stats boxes (remembered per browser) ── */
+function useBoxOpen(key, initial = true) {
+  const [open, setOpen] = useState(() => {
+    try { const v = localStorage.getItem(`agricola.box2.${key}`); return v === null ? initial : v === "1"; } catch { return initial; }
+  });
+  const toggle = () => setOpen(o => {
+    const n = !o;
+    try { localStorage.setItem(`agricola.box2.${key}`, n ? "1" : "0"); } catch { /* storage unavailable */ }
+    return n;
+  });
+  return [open, toggle];
+}
+
+function useIsNarrow(maxWidth = 520) {
+  const [narrow, setNarrow] = useState(() => typeof window !== "undefined" && window.innerWidth < maxWidth);
+  useEffect(() => {
+    const onResize = () => setNarrow(window.innerWidth < maxWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [maxWidth]);
+  return narrow;
+}
+
+/* Title row = title + toggle only. Extra header content (legend, links) goes on its own line below. */
+function BoxHeader({ title, open, onToggle, summary, children }) {
+  const narrow = useIsNarrow();
+  return (
+    <div style={{ marginBottom: open ? 8 : 0 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <button onClick={onToggle} aria-expanded={open} title={open ? "Minimise" : "Expand"} style={{
+          flex: 1, minWidth: 0, display: "flex", alignItems: "baseline", gap: 6, padding: 0, border: "none", background: "none",
+          cursor: "pointer", textAlign: "left",
+        }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: T.textSecondary, textTransform: "uppercase", letterSpacing: 0.5, lineHeight: 1.35 }}>{title}</span>
+          {!open && summary && <span style={{ fontSize: 11, color: T.textMuted, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>· {summary}</span>}
+        </button>
+        <button onClick={onToggle} aria-label={open ? "Minimise" : "Expand"} title={open ? "Minimise" : "Expand"} style={{
+          flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+          minWidth: narrow ? 32 : undefined, height: narrow ? 28 : undefined, padding: narrow ? 0 : "4px 10px",
+          border: `1.5px solid ${open ? T.border : T.accent}`, borderRadius: 6,
+          background: open ? T.surface : T.accentBg, color: open ? T.textSecondary : T.accent,
+          fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap",
+        }}>
+          {narrow
+            ? <span style={{ fontSize: 12 }}>{open ? "▲" : "▼"}</span>
+            : open ? <>Minimise <span style={{ fontSize: 9 }}>▲</span></> : <>Expand <span style={{ fontSize: 9 }}>▼</span></>}
+        </button>
+      </div>
+      {open && children && <div style={{ marginTop: 6 }}>{children}</div>}
+    </div>
+  );
+}
+
+/* ── Tournament points visualisation (standings + position per game) ── */
+const GAME_COLORS = ["#b45309", "#2563eb", "#059669", "#7c3aed", "#db2777", "#0891b2", "#ca8a04", "#4b5563", "#65a30d", "#9333ea"];
+const FINAL_COLOR = "#be123c";
+const fmtPts = (v) => (v == null ? "–" : Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/0+$/, "").replace(/\.$/, ""));
+
+export function TournamentPointsViz({ tournamentId, finalWeight }) {
+  const [sheet, setSheet] = useState(null);
+  const [selected, setSelected] = useState(null);
+  const [hover, setHover] = useState(null);   // { name, label, pts, score, rank, tie }
+  const [pointsOpen, togglePoints] = useBoxOpen("points");
+  const [bumpOpen, toggleBump] = useBoxOpen("bump", false);
+
+  useEffect(() => {
+    let alive = true;
+    const load = () => fetch(`${API_BASE}/api/tournaments/${tournamentId}/sheet`).then(r => r.json())
+      .then(d => { if (alive && d && d.rounds) setSheet(d); }).catch(() => {});
+    load();
+    const t = setInterval(load, 30000);   // keep it live during the tournament
+    return () => { alive = false; clearInterval(t); };
+  }, [tournamentId]);
+
+  const data = useMemo(() => {
+    if (!sheet) return null;
+    const rounds = sheet.rounds.filter(r => r.hasScores);
+    if (!rounds.length) return null;
+    const per = {};   // name -> [{label, pts, score, rank, tie, isFinal}]
+    rounds.forEach((r, ri) => {
+      r.tables.forEach(t => t.seats.forEach(seat => {
+        (per[seat.name] ||= [])[ri] = { label: r.label, isFinal: r.isFinal, pts: seat.turnP ?? 0, score: seat.score, rank: seat.tabRank, tie: seat.tie, table: t.table, missing: seat.score == null };
+      }));
+    });
+    const standings = rounds[rounds.length - 1].standings;
+    const maxTotal = Math.max(1, ...standings.map(s => s.turnP));
+    const ranksByRound = rounds.map(r => Object.fromEntries(r.standings.map(s => [s.name, s.rank])));
+    return { rounds, per, standings, maxTotal, ranksByRound };
+  }, [sheet]);
+
+  if (!data) return null;
+  const { rounds, per, standings, maxTotal, ranksByRound } = data;
+  const colorOf = (ri) => (rounds[ri].isFinal ? FINAL_COLOR : GAME_COLORS[ri % GAME_COLORS.length]);
+  const box = { background: T.surface, borderRadius: 10, border: `1px solid ${T.borderLight}`, padding: "12px 16px", marginBottom: 16 };
+  const top3 = ["#b45309", "#2563eb", "#059669"];
+
+  // ── bump chart geometry ──
+  const N = standings.length, R = rounds.length;
+  const rowH = 16, padL = 26, padR = 96, padT = 18, padB = 22;
+  const W = 600, H = padT + padB + (N - 1) * rowH;
+  const xAt = (i) => (R === 1 ? padL + (W - padL - padR) / 2 : padL + (i * (W - padL - padR)) / (R - 1));
+  const yAt = (rank) => padT + (rank - 1) * rowH;
+  const lineColor = (name) => {
+    const finalRank = ranksByRound[R - 1][name];
+    if (selected) return name === selected ? T.accent : "#d6d3d1";
+    return finalRank <= 3 ? top3[finalRank - 1] : "#c8c3bd";
+  };
+  const order = [...standings].sort((a, b) => {
+    const w = (n) => (selected ? (n === selected ? 2 : 0) : (ranksByRound[R - 1][n] <= 3 ? 1 : 0));
+    return w(a.name) - w(b.name);
+  });
+
+  return (
+    <>
+      {/* Standings: stacked tournament points per game */}
+      <div style={box}>
+        <BoxHeader title={`Tournament points · after ${sheet.standingsAfter}`} open={pointsOpen} onToggle={togglePoints}
+          summary={standings.slice(0, 3).map(s => `${s.rank}. ${s.name} ${fmtPts(s.turnP)}`).join(" · ")}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {rounds.map((r, ri) => (
+              <span key={r.label} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: T.textSecondary }}>
+                <span style={{ width: 10, height: 10, background: colorOf(ri), display: "inline-block" }} />{r.isFinal ? `Final ×${finalWeight}` : r.label.replace("Game ", "G")}
+              </span>
+            ))}
+          </div>
+        </BoxHeader>
+        {pointsOpen && <>
+        <div style={{ fontSize: 11, color: T.textMuted, minHeight: 16, marginBottom: 6 }}>
+          {hover ? <><b style={{ color: T.text }}>{hover.name}</b> · {hover.label}: {hover.missing ? "score not reported yet" : <>{fmtPts(hover.pts)} pts (score {hover.score}, {hover.rank}{hover.tie ? "= shared" : ""} at table {hover.table})</>}</>
+                 : "Tap or hover a bar for details · tap a name to follow the player below"}
+        </div>
+        {standings.map((s) => {
+          const segs = per[s.name] || [];
+          const isSel = selected === s.name;
+          return (
+            <div key={s.name} style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 0", opacity: selected && !isSel ? 0.55 : 1 }}>
+              <span style={{ width: 20, fontSize: 11, fontWeight: 700, textAlign: "right", color: s.rank <= 3 ? T.accent : T.textMuted }}>{s.rank}</span>
+              <button onClick={() => setSelected(isSel ? null : s.name)} style={{
+                width: 92, flexShrink: 0, textAlign: "left", fontSize: 12, padding: 0, border: "none", background: "none", cursor: "pointer",
+                color: T.text, fontWeight: isSel ? 800 : 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              }}>{s.name}</button>
+              <div style={{ flex: 1, display: "flex", height: 14, background: T.surfaceAlt, minWidth: 0 }}>
+                {segs.map((g, ri) => g && g.pts > 0 && (
+                  <div key={ri}
+                    onMouseEnter={() => setHover({ name: s.name, ...g })} onMouseLeave={() => setHover(null)}
+                    onClick={() => setHover({ name: s.name, ...g })}
+                    title={`${g.label}: ${fmtPts(g.pts)} pts`}
+                    style={{
+                      width: `${(g.pts / maxTotal) * 100}%`, background: colorOf(ri), cursor: "pointer",
+                      borderRight: "1px solid #fff", boxSizing: "border-box",
+                      backgroundImage: g.tie ? "repeating-linear-gradient(45deg, rgba(255,255,255,.35) 0 3px, transparent 3px 6px)" : "none",
+                    }} />
+                ))}
+              </div>
+              <span style={{ width: 40, fontSize: 12, fontWeight: 700, textAlign: "right", color: T.text }}>{fmtPts(s.turnP)}</span>
+            </div>
+          );
+        })}
+        <div style={{ fontSize: 10, color: T.textMuted, marginTop: 8 }}>
+          10/6/3/1 per table · striped = tie, points shared equally · equal totals ranked by RelSc
+        </div>
+        </>}
+      </div>
+
+      {/* Position after each game */}
+      {R >= 2 && (
+        <div style={box}>
+          <BoxHeader title="Position after each game" open={bumpOpen} onToggle={toggleBump}
+            summary={selected ? `following ${selected}` : `${R} games`}>
+            {selected && <button onClick={() => setSelected(null)} style={{ fontSize: 11, color: T.textMuted, background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>show all</button>}
+          </BoxHeader>
+          {bumpOpen && <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }} role="img" aria-label="Rank after each game">
+            {rounds.map((r, i) => (
+              <g key={r.label}>
+                <line x1={xAt(i)} x2={xAt(i)} y1={padT - 6} y2={H - padB + 4} stroke={T.borderLight} />
+                <text x={xAt(i)} y={H - 6} fontSize="10" textAnchor="middle" fill={T.textMuted}>{r.isFinal ? "Final" : r.label.replace("Game ", "G")}</text>
+              </g>
+            ))}
+            {[1, Math.ceil(N / 2), N].filter((v, i, a) => a.indexOf(v) === i).map(rk => (
+              <text key={rk} x={padL - 8} y={yAt(rk) + 3} fontSize="9" textAnchor="end" fill={T.textMuted}>{rk}</text>
+            ))}
+            {order.map(s => {
+              const pts = ranksByRound.map((m, i) => [xAt(i), yAt(m[s.name])]);
+              const c = lineColor(s.name);
+              const strong = selected ? s.name === selected : ranksByRound[R - 1][s.name] <= 3;
+              return (
+                <g key={s.name} style={{ cursor: "pointer" }} onClick={() => setSelected(selected === s.name ? null : s.name)}>
+                  <polyline points={pts.map(p => p.join(",")).join(" ")} fill="none" stroke={c} strokeWidth={strong ? 2.5 : 1.2} strokeLinejoin="round" />
+                  {pts.map((p, i) => <circle key={i} cx={p[0]} cy={p[1]} r={strong ? 3 : 1.8} fill={c} />)}
+                  <text x={xAt(R - 1) + 8} y={yAt(ranksByRound[R - 1][s.name]) + 3} fontSize="10"
+                    fill={strong ? c : T.textSecondary} fontWeight={strong ? 700 : 400}>
+                    {ranksByRound[R - 1][s.name]}. {s.name}
+                  </text>
+                </g>
+              );
+            })}
+          </svg>}
+        </div>
+      )}
+    </>
+  );
+}
+
 /* ── Analytics panel for a single tournament or event ── */
-function TournamentDetail({ tournament, onClose }) {
+export function TournamentDetail({ tournament, onClose }) {
   const [scores, setScores] = useState(null);
+  const [allOpen, toggleAll] = useBoxOpen("allScores", false);
+  const [lbOpen, toggleLb] = useBoxOpen("bestScores", false);
+  const [distOpen, toggleDist] = useBoxOpen("distribution", false);
+  const [catOpen, toggleCat] = useBoxOpen("categories", false);
 
   useEffect(() => {
     const url = tournament.id
@@ -177,10 +384,13 @@ function TournamentDetail({ tournament, onClose }) {
             ))}
           </div>
 
-          {/* Leaderboard */}
+          {tournament.id && <TournamentPointsViz tournamentId={tournament.id} finalWeight={tournament.finalWeight ?? 1.25} />}
+
+          {/* Leaderboard (raw game scores) */}
           <div style={{ background: T.surface, borderRadius: 10, border: `1px solid ${T.borderLight}`, padding: "12px 16px", marginBottom: 16 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: T.textSecondary, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Leaderboard</div>
-            {analytics.leaderboard.map((p, i) => (
+            <BoxHeader title={tournament.id ? "Best game scores" : "Leaderboard"} open={lbOpen} onToggle={toggleLb}
+              summary={analytics.leaderboard[0] ? `${analytics.leaderboard[0].name} ${analytics.leaderboard[0].best}` : ""} />
+            {lbOpen && analytics.leaderboard.map((p, i) => (
               <div key={p.name} style={{
                 display: "flex", alignItems: "center", gap: 8, padding: "6px 0",
                 borderBottom: i < analytics.leaderboard.length - 1 ? `1px solid ${T.borderLight}` : "none",
@@ -197,8 +407,8 @@ function TournamentDetail({ tournament, onClose }) {
           {/* Score distribution */}
           {analytics.distribution.length > 0 && (
             <div style={{ background: T.surface, borderRadius: 10, border: `1px solid ${T.borderLight}`, padding: "12px 16px", marginBottom: 16 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: T.textSecondary, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Score Distribution</div>
-              <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 80 }}>
+              <BoxHeader title="Score Distribution" open={distOpen} onToggle={toggleDist} summary={`${analytics.worst}–${analytics.best}`} />
+              {distOpen && <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 80 }}>
                 {analytics.distribution.map(b => {
                   const max = Math.max(...analytics.distribution.map(d => d.count));
                   const h = max > 0 ? (b.count / max) * 70 : 0;
@@ -209,29 +419,29 @@ function TournamentDetail({ tournament, onClose }) {
                     </div>
                   );
                 })}
-              </div>
+              </div>}
             </div>
           )}
 
           {/* Category averages */}
           {analytics.categoryAvg.length > 0 && (
             <div style={{ background: T.surface, borderRadius: 10, border: `1px solid ${T.borderLight}`, padding: "12px 16px", marginBottom: 16 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: T.textSecondary, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Category Averages</div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 16px" }}>
+              <BoxHeader title="Category Averages" open={catOpen} onToggle={toggleCat} summary={`${analytics.categoryAvg.length} categories`} />
+              {catOpen && <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 16px" }}>
                 {analytics.categoryAvg.map(c => (
                   <div key={c.key} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "3px 0" }}>
                     <span style={{ color: T.textSecondary }}>{c.label}</span>
                     <span style={{ fontWeight: 700, color: c.avg >= 0 ? T.green : T.red }}>{c.avg > 0 ? "+" : ""}{c.avg}</span>
                   </div>
                 ))}
-              </div>
+              </div>}
             </div>
           )}
 
           {/* Individual scores */}
           <div style={{ background: T.surface, borderRadius: 10, border: `1px solid ${T.borderLight}`, padding: "12px 16px" }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: T.textSecondary, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>All Scores</div>
-            {scores.map((s, i) => (
+            <BoxHeader title="All Scores" open={allOpen} onToggle={toggleAll} summary={`${scores.length} scores`} />
+            {allOpen && scores.map((s, i) => (
               <div key={s.id || i} style={{
                 display: "flex", alignItems: "center", gap: 8, padding: "6px 0",
                 borderBottom: i < scores.length - 1 ? `1px solid ${T.borderLight}` : "none",
